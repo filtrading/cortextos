@@ -12,7 +12,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 
-const REPO_URL = process.env.CORTEXTOS_REPO || 'https://github.com/grandamenium/cortextos-test.git';
+const REPO_URL = process.env.CORTEXTOS_REPO || 'https://github.com/grandamenium/cortextos.git';
 const INSTALL_DIR = process.env.CORTEXTOS_DIR || join(homedir(), 'cortextos');
 const IS_WINDOWS = platform() === 'win32';
 
