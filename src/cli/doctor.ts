@@ -91,13 +91,18 @@ export const doctorCommand = new Command('doctor')
       fix: !existsSync(ctxRoot) ? 'Run: cortextos init <org-name>' : undefined,
     });
 
-    // Check ANTHROPIC_API_KEY
-    checks.push({
-      name: 'ANTHROPIC_API_KEY',
-      status: process.env.ANTHROPIC_API_KEY ? 'pass' : 'warn',
-      message: process.env.ANTHROPIC_API_KEY ? 'Set' : 'Not set',
-      fix: !process.env.ANTHROPIC_API_KEY ? 'Export ANTHROPIC_API_KEY in your shell profile' : undefined,
-    });
+    // Check Claude Code auth
+    try {
+      execSync('claude --version', { encoding: 'utf8', stdio: 'pipe' });
+      checks.push({ name: 'Claude Code auth', status: 'pass', message: 'Authenticated' });
+    } catch {
+      checks.push({
+        name: 'Claude Code auth',
+        status: 'warn',
+        message: 'Not authenticated',
+        fix: 'Run: claude login',
+      });
+    }
 
     // Display results
     let hasFailures = false;
