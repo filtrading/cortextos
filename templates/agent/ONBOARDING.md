@@ -41,7 +41,17 @@ This is your first time running. Before starting normal operations, complete thi
 
    Write to USER.md Working Hours section. Update SOUL.md Day/Night Mode section: find the lines `### Day Mode (8:00 AM - 12:00 AM)` and `### Night Mode (12:00 AM - 8:00 AM)` and replace the times with their actual hours.
 
-7. **Discover your team:**
+7. **Ask for autonomy level:**
+   > "How autonomously should I operate?
+   > 1. Ask first — I check with you or the orchestrator before taking any significant action
+   > 2. Balanced — I act independently on routine tasks, ask for anything external or irreversible
+   > 3. Autonomous — I act on my own judgment, flag outcomes after the fact
+   >
+   > What level fits best for my role?"
+
+   Write to SOUL.md Autonomy section.
+
+8. **Discover your team:**
    ```bash
    cortextos bus read-all-heartbeats
    # Fallback if no heartbeats yet: ls "${CTX_ROOT}/state/" 2>/dev/null
@@ -54,7 +64,7 @@ This is your first time running. Before starting normal operations, complete thi
 
 ## Part 2: Workflows and Crons
 
-8. **Ask for workflows:**
+9. **Ask for workflows:**
    > "What recurring workflows do you want me to handle? For example: monitor GitHub repos every 3 hours, check email twice a day, review PRs when they come in, post a daily summary. List everything you want me to do on a schedule or in response to events."
 
    For each workflow the user describes:
@@ -67,7 +77,7 @@ This is your first time running. Before starting normal operations, complete thi
      ```
    - If the workflow is complex (multi-step procedure), create a skill file at `skills/<workflow-name>/SKILL.md` with YAML frontmatter and detailed steps
 
-9. **Ask for tools and access:**
+10. **Ask for tools and access:**
    > "For each workflow, what tools or services do I need access to? Think: GitHub repos, APIs, databases, Slack, email accounts, specific websites. Let me know what needs credentials and we'll set them up now."
 
    For each tool:
@@ -80,7 +90,7 @@ This is your first time running. Before starting normal operations, complete thi
 
 Before moving on, explain how approvals work — this is critical for any agent taking external actions:
 
-10. **Explain approvals:**
+11. **Explain approvals:**
     > "Before I do anything external — send an email, push code, make a purchase, delete data — I create an approval request. You'll see it on the dashboard and get a Telegram notification. I wait for your decision before acting.
     >
     > Here's what triggers an approval from me:
@@ -104,12 +114,12 @@ Before moving on, explain how approvals work — this is critical for any agent 
 
 After workflows and tools are configured:
 
-11. **Customize HEARTBEAT.md:**
+12. **Customize HEARTBEAT.md:**
     > "One quick config question. How long before a task with no updates gets flagged as stale? (default: 3 days — keeps the dashboard clean)"
 
     Update the stale task threshold in HEARTBEAT.md Step 3.
 
-12. **Check for knowledge base:**
+13. **Check for knowledge base:**
     ```bash
     [ -f "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/secrets.env" ] && grep -q GEMINI_API_KEY "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/secrets.env" && echo "KB enabled" || echo "no KB"
     ```
@@ -120,7 +130,7 @@ After workflows and tools are configured:
 
 ## Part 3: Context Import
 
-13. **Ask for external context:**
+14. **Ask for external context:**
    > "Is there any external information I should import to give me additional context? Documents, repos to clone, reference material, style guides, existing processes I should know about? The more context the better."
 
    For each item:
@@ -131,7 +141,7 @@ After workflows and tools are configured:
 
 ## Part 4: Finalize
 
-14. **Write IDENTITY.md** based on their answers:
+15. **Write IDENTITY.md** based on their answers:
    ```
    # Agent Identity
 
@@ -155,7 +165,7 @@ After workflows and tools are configured:
    - Default: external-comms, financial, deployment, data-deletion require approval
    ```
 
-15. **Write GOALS.md** based on their answers:
+16. **Write GOALS.md** based on their answers:
    ```
    # Current Goals
 
@@ -169,7 +179,7 @@ After workflows and tools are configured:
    <current ISO timestamp>
    ```
 
-16. **Write USER.md** based on their answers:
+17. **Write USER.md** based on their answers:
     ```
     # About the User
 
@@ -193,12 +203,12 @@ After workflows and tools are configured:
     - Chat ID: <from .env>
     ```
 
-17. **Confirm with user** via Telegram:
+18. **Confirm with user** via Telegram:
     > "All set! Here's who I am: [summary]. I have [N] crons set up: [list]. My top priority is [goal 1]. Anything you want to change before I start working?"
 
     Make any changes they request.
 
-18. **Mark onboarding complete and signal orchestrator:**
+19. **Mark onboarding complete and signal orchestrator:**
     ```bash
     touch "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded"
     cortextos bus log-event action onboarding_complete info '{"agent":"'$CTX_AGENT_NAME'","role":"specialist"}'
@@ -213,14 +223,14 @@ After workflows and tools are configured:
     fi
     ```
 
-19. **Continue normal bootstrap** - proceed with the rest of the session start protocol in CLAUDE.md (crons are already set up from step 8, so skip that step).
+20. **Continue normal bootstrap** - proceed with the rest of the session start protocol in CLAUDE.md (crons are already set up from step 9, so skip that step).
 
 ## Part 5: Autoresearch (Experiments)
 
-20. **Explain autoresearch:**
+21. **Explain autoresearch:**
     > "One more thing. Autoresearch is how I improve over time. I can run experiments on specific aspects of my work - testing hypotheses, measuring results, keeping what works. Think of me as a scientist iterating on my craft."
 
-21. **Offer to set up an experiment:**
+22. **Offer to set up an experiment:**
     > "Do you already know a metric you want me to optimize? For example:
     > - If I'm a content agent: engagement rate, views, click-through
     > - If I'm a dev agent: build reliability, code quality, deploy speed
@@ -228,7 +238,7 @@ After workflows and tools are configured:
     >
     > If you know what to optimize, I can set up a research cycle now. Otherwise, the analyst agent will set one up for me later based on my goals."
 
-22. If user wants to set up now:
+23. If user wants to set up now:
     - Ask: (a) what metric to optimize, (b) what to experiment on — the "surface" (a file, a prompt, a workflow), (c) how to measure results, (d) how long between experiments
     - Ask: "Should I need your approval before running each experiment, or experiment autonomously?" (approval preference — note: already covered in Part 2b for external actions, this is specifically for experiments)
     - Write to `experiments/config.json`:
@@ -257,7 +267,7 @@ After workflows and tools are configured:
       {"name": "experiment-<metric>", "interval": "<window>", "prompt": "Read skills/autoresearch/SKILL.md. Run one experiment cycle for metric '<metric>'."}
       ```
 
-23. If user does not want to set up now:
+24. If user does not want to set up now:
     > "No problem. The analyst will configure experiments for me based on my goals. You can always set one up later."
 
 ## Notes

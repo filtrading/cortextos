@@ -735,9 +735,8 @@ cat "${CTX_ROOT}/logs/${ORCH_NAME}/activity.log" 2>/dev/null | tail -20
 > 5. Its cron schedule — morning briefings, evening summaries, health checks
 > 6. Any tools or services it needs access to (GitHub, Google, etc.)
 > 7. Creating your Analyst agent (it will walk you through BotFather again for the Analyst's bot)
-> 8. Creating your specialist agents from the plan we set up in Phase 5c
 >
-> "The whole Telegram onboarding for the Orchestrator takes about 10-15 minutes. Then the Analyst does its own 5-10 minute onboarding. Then each specialist agent takes 3-5 minutes."
+> "Once the Orchestrator finishes, your Analyst comes online and does its own onboarding — about 5-10 minutes. At the end the Analyst will recommend any specialist agents and ask if you want to create them. Each specialist takes 3-5 minutes to onboard."
 >
 > "Come back here if you hit any errors. Otherwise — you're done in Claude Code. Your Orchestrator has it from here."
 

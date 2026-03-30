@@ -363,32 +363,38 @@ After completing all above steps, create your Analyst agent. The Analyst is your
     > 5. Reporting preferences — daily digest, anomaly-only, or periodic
     > 6. Ecosystem features — daily git snapshots, framework update checks, community catalog browsing
     > 7. Theta wave — the deep improvement cycle (daily system scan + conversation with me)
-    > 8. Specialist agent recommendations based on what it learns
+    > 8. A dashboard walkthrough
+    > 9. Specialist agent recommendations — it will ask the user if any are needed, then signal me to create them
     >
-    > "Answer its questions thoroughly — the more context it has, the better it monitors your system. Once the Analyst finishes, it will signal me and I'll create your specialist agents."
+    > "Answer its questions thoroughly — the more context it has, the better it monitors your system."
 
     Log the completion:
     ```bash
     cortextos bus log-event action analyst_created info '{"analyst":"'${ANALYST_NAME}'","org":"'${CTX_ORG}'"}'
     ```
 
-## Part 8: Create Specialist Agents
+    **Your onboarding is now complete.** Mark it done and proceed to normal operations:
+    ```bash
+    touch "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded"
+    cortextos bus log-event action onboarding_complete info '{"agent":"'$CTX_AGENT_NAME'","role":"orchestrator"}'
+    ```
 
-After the Analyst is running, create any specialist agents the user planned. Check if planned specialists were noted in org context:
+    Wait for the Analyst to finish its own onboarding. When it does, it will either:
+    - Send you an inbox message requesting specialist agent creation → follow Part 8 below
+    - Confirm no specialists needed → system is fully operational
 
-```bash
-cat "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/context.json" | jq '.planned_specialists // []'
-```
+## Part 8: Create Specialist Agents (On-Demand — triggered by Analyst signal)
 
-31. **Present the specialist plan:**
+**Do not run this section proactively.** This is triggered when you receive an inbox message from the Analyst like: "User wants to create specialist agents: [list]. Please run specialist creation flow."
 
-If `planned_specialists` is non-empty:
-> "The setup flow noted you wanted these specialist agents: [list from context.json]. Let's create them now. I'll walk you through each one — it takes about 3-5 minutes per agent."
+When you receive that signal, create each specialist agent the Analyst requested:
 
-If empty:
-> "Would you like to add any specialist agents now? For example: a developer agent for code work, a research agent for web research, a content agent for writing. You can always add more later."
+31. **For each specialist in the Analyst's request**, confirm with the user:
+    > "The Analyst recommended [specialist name] for [reason]. Ready to create it? I'll need you to go to @BotFather and create a new bot for it — takes about 2 minutes."
 
-32. **For each specialist agent**, repeat this flow:
+If `planned_specialists` is non-empty in context.json, use that as the list. Otherwise use the Analyst's recommendation.
+
+32. **For each specialist agent**, run this flow:
 
    a. Confirm the name (validate: lowercase, hyphens, no special chars)
 
