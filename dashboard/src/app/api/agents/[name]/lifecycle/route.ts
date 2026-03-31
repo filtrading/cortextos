@@ -20,6 +20,14 @@ function isValidName(name: string): boolean {
 
 const VALID_ACTIONS = ['enable', 'disable', 'restart'];
 
+// Security (C4): Validate org and name against allowlist before use in shell commands or path.join.
+function validateIdentifier(value: string | null | undefined, field: string): string {
+  if (!value || !/^[a-z0-9_-]+$/.test(value)) {
+    throw new Error(`Invalid ${field}: must match [a-z0-9_-]+`);
+  }
+  return value;
+}
+
 function getShellEnv() {
   const frameworkRoot = getFrameworkRoot();
   const ctxRoot = getCTXRoot();
@@ -71,9 +79,19 @@ export async function POST(
     );
   }
 
+  // Security (C4): Validate org before use in shell commands.
+  let safeOrg: string | undefined;
+  if (org !== undefined) {
+    try {
+      safeOrg = validateIdentifier(org, 'org');
+    } catch (err: any) {
+      return Response.json({ error: err.message }, { status: 400 });
+    }
+  }
+
   const { env, frameworkRoot } = getShellEnv();
   const escapedName = shellEscape(decoded);
-  const orgFlag = org ? ` --org '${shellEscape(org)}'` : '';
+  const orgFlag = safeOrg ? ` --org '${shellEscape(safeOrg)}'` : '';
 
   let cmd: string;
   switch (action) {
@@ -157,9 +175,20 @@ export async function DELETE(
     // File doesn't exist or is malformed
   }
 
+  // Security (C4): Validate org from stored data before use in shell commands and path.join.
+  let safeDeleteOrg = '';
+  if (org) {
+    try {
+      safeDeleteOrg = validateIdentifier(org, 'org');
+    } catch {
+      // org stored in registry is malformed — skip shell/fs operations that use it
+      safeDeleteOrg = '';
+    }
+  }
+
   // 1. Disable the agent first
   try {
-    const orgFlag = org ? ` --org '${shellEscape(org)}'` : '';
+    const orgFlag = safeDeleteOrg ? ` --org '${shellEscape(safeDeleteOrg)}'` : '';
     execSync(
       `bash '${shellEscape(frameworkRoot)}/disable-agent.sh' '${shellEscape(decoded)}'${orgFlag}`,
       { encoding: 'utf-8', timeout: 30000, env },
@@ -188,9 +217,9 @@ export async function DELETE(
   }
 
   // 3. Optionally remove agent directory
-  if (deleteFiles && org) {
+  if (deleteFiles && safeDeleteOrg) {
     try {
-      const agentDir = path.join(frameworkRoot, 'orgs', org, 'agents', decoded);
+      const agentDir = path.join(frameworkRoot, 'orgs', safeDeleteOrg, 'agents', decoded);
       await fs.rm(agentDir, { recursive: true, force: true });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

@@ -82,6 +82,13 @@ export async function POST(request: NextRequest) {
   if (!org || typeof org !== 'string') {
     return Response.json({ error: 'org is required' }, { status: 400 });
   }
+  // Security (C4): Validate org against allowlist before use in path.join and shell commands.
+  if (!VALID_NAME.test(org)) {
+    return Response.json(
+      { error: 'org must match /^[a-z0-9_-]+$/' },
+      { status: 400 },
+    );
+  }
   if (!template || !VALID_TEMPLATES.includes(template)) {
     return Response.json(
       { error: `template must be one of: ${VALID_TEMPLATES.join(', ')}` },
