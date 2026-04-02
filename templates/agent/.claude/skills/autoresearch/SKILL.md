@@ -137,11 +137,13 @@ cortextos bus manage-cycle create $CTX_AGENT_NAME \
 # Only set to false if user explicitly says no approval needed
 ```
 
-Then set up the cron (using the loop interval the user chose):
-```bash
-# Add to config.json crons array
-# {"name": "experiment-<metric>", "interval": "<loop_interval>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
-/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.
+Then set up the cron immediately (this is a Claude command, not a bash command — run it directly):
+
+`/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.`
+
+Then add to `config.json` crons array:
+```json
+{"name": "experiment-<metric>", "interval": "<loop_interval>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
 ```
 
 To modify a cycle when the user asks:

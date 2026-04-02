@@ -131,16 +131,19 @@ cortextos bus manage-cycle create $CTX_AGENT_NAME \
   --metric "<metric_name>" \
   --metric-type "<quantitative|qualitative>" \
   --surface "experiments/surfaces/<metric>/current.md" \
-  --direction "higher" \
+  --direction "<higher|lower>" \
   --window "<e.g. 72h>" \
   --measurement "<how to measure>" \
   --loop-interval "<e.g. 72h>"
 ```
 
-Then set up the cron:
-```bash
-/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.
-# Add to config.json crons: {"name": "experiment-<metric>", "interval": "<loop_interval>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
+Then set up the cron immediately (this is a Claude command, not a bash command — run it directly):
+
+`/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.`
+
+Then add to `config.json` crons array:
+```json
+{"name": "experiment-<metric>", "interval": "<loop_interval>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
 ```
 
 To modify a cycle when the user asks:

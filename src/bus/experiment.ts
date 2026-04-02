@@ -236,8 +236,26 @@ export function evaluateExperiment(
   experiment.result_value = measuredValue;
   experiment.decision = decision;
 
-  if (options?.learning) {
-    experiment.learning = options.learning;
+  // For qualitative metrics: if score is provided, use it as the measured value
+  // (agent passes 0 as placeholder measuredValue and --score 7 as the actual value)
+  if (options?.score !== undefined) {
+    measuredValue = options.score;
+    // Re-evaluate decision with the correct measured value
+    if (experiment.direction === 'higher') {
+      decision = measuredValue > experiment.baseline_value ? 'keep' : 'discard';
+    } else {
+      decision = measuredValue < experiment.baseline_value ? 'keep' : 'discard';
+    }
+    experiment.result_value = measuredValue;
+    experiment.decision = decision;
+  }
+
+  // Build learning from options
+  const learningParts: string[] = [];
+  if (options?.learning) learningParts.push(options.learning);
+  if (options?.justification) learningParts.push(options.justification);
+  if (learningParts.length > 0) {
+    experiment.learning = learningParts.join(' — ');
   }
 
   // If keep, baseline becomes the measured value
