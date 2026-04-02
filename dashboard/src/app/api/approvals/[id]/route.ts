@@ -139,7 +139,7 @@ export async function PATCH(
 
     console.error('[api/approvals/[id]] PATCH error:', message);
     return Response.json(
-      { error: 'Failed to resolve approval', details: message },
+      { error: 'Failed to resolve approval' },
       { status: 500 },
     );
   }

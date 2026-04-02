@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[api/agents] POST error:', message);
     return Response.json(
-      { error: 'Failed to create agent', details: message },
+      { error: 'Failed to create agent' },
       { status: 500 },
     );
   }

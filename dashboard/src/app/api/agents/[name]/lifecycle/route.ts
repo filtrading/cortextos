@@ -114,7 +114,7 @@ export async function POST(
     const stderr = result.stderr?.trim();
     console.error(`[api/agents/${decoded}/lifecycle] POST error:`, stderr || result.stdout);
     return Response.json(
-      { error: `Failed to ${action} agent`, stderr },
+      { error: `Failed to ${action} agent` },
       { status: 500 },
     );
   }
@@ -198,7 +198,7 @@ export async function DELETE(
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[api/agents/${decoded}/lifecycle] failed to update enabled-agents.json:`, message);
     return Response.json(
-      { error: 'Failed to update agent registry', details: message },
+      { error: 'Failed to update agent registry' },
       { status: 500 },
     );
   }

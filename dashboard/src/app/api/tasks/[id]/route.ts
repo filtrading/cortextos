@@ -259,7 +259,7 @@ export async function PATCH(
     const message = err instanceof Error ? err.message : String(err);
     console.error('[api/tasks/[id]] PATCH error:', message);
     return Response.json(
-      { error: 'Failed to update task', details: message },
+      { error: 'Failed to update task' },
       { status: 500 },
     );
   }
