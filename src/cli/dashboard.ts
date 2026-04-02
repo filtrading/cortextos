@@ -1,12 +1,31 @@
 import { Command } from 'commander';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { join } from 'path';
+import { homedir, platform } from 'os';
+import { randomBytes } from 'crypto';
+
+const IS_WINDOWS = platform() === 'win32';
+
+function parseEnvFile(filePath: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  try {
+    for (const line of readFileSync(filePath, 'utf-8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx > 0) result[trimmed.slice(0, idx)] = trimmed.slice(idx + 1);
+    }
+  } catch { /* ignore */ }
+  return result;
+}
 
 export const dashboardCommand = new Command('dashboard')
   .option('--port <port>', 'Port to run dashboard on', '3000')
+  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--build', 'Build for production first (recommended for Cloudflare Tunnel / remote access)')
   .option('--install', 'Install dashboard dependencies first')
   .description('Start the cortextOS dashboard (Next.js)')
-  .action(async (options: { port: string; install?: boolean }) => {
+  .action(async (options: { port: string; instance: string; build?: boolean; install?: boolean }) => {
     const { execSync, spawn } = require('child_process');
 
     // Find dashboard directory
@@ -16,11 +35,49 @@ export const dashboardCommand = new Command('dashboard')
       process.exit(1);
     }
 
-    console.log(`Starting cortextOS dashboard from ${dashboardDir}`);
+    // ─── Load / generate dashboard credentials ────────────────────────────────
 
-    // Install dependencies if needed or requested
+    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const dashEnvPath = join(ctxRoot, 'dashboard.env');
+
+    let dashCreds: Record<string, string> = {};
+    if (existsSync(dashEnvPath)) {
+      dashCreds = parseEnvFile(dashEnvPath);
+    }
+
+    // Auth secret: env > dashboard.env > auto-generate
+    let authSecret = process.env.AUTH_SECRET || dashCreds['AUTH_SECRET'];
+    if (!authSecret) {
+      authSecret = randomBytes(32).toString('hex');
+      console.log('\n  AUTH_SECRET not set — generating one automatically.');
+      // Persist it so future runs don't regenerate
+      dashCreds['AUTH_SECRET'] = authSecret;
+      dashCreds['ADMIN_USERNAME'] = dashCreds['ADMIN_USERNAME'] || 'admin';
+      if (!dashCreds['ADMIN_PASSWORD']) {
+        dashCreds['ADMIN_PASSWORD'] = randomBytes(12).toString('hex');
+        console.log(`  Generated admin password: ${dashCreds['ADMIN_PASSWORD']}`);
+        console.log(`  Saved to: ${dashEnvPath}`);
+      }
+      const content = Object.entries(dashCreds).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+      writeFileSync(dashEnvPath, content, 'utf-8');
+      try { chmodSync(dashEnvPath, 0o600); } catch { /* ignore on Windows */ }
+    }
+
+    // Admin password: env > dashboard.env > hard fail
+    const adminPassword = process.env.ADMIN_PASSWORD || dashCreds['ADMIN_PASSWORD'];
+    if (!adminPassword) {
+      console.error('\nERROR: ADMIN_PASSWORD is not set.');
+      console.error('Run: cortextos install  (auto-generates dashboard credentials)');
+      console.error(`Or set ADMIN_PASSWORD in your environment or ${dashEnvPath}`);
+      process.exit(1);
+    }
+
+    const adminUsername = process.env.ADMIN_USERNAME || dashCreds['ADMIN_USERNAME'] || 'admin';
+
+    // ─── Install dashboard deps ───────────────────────────────────────────────
+
     if (options.install || !existsSync(join(dashboardDir, 'node_modules'))) {
-      console.log('Installing dashboard dependencies...');
+      console.log('\nInstalling dashboard dependencies...');
       try {
         execSync('npm install', { cwd: dashboardDir, stdio: 'inherit', timeout: 120000 });
       } catch (err) {
@@ -29,27 +86,63 @@ export const dashboardCommand = new Command('dashboard')
       }
     }
 
-    // Start Next.js dev server
-    console.log(`\nDashboard starting on http://localhost:${options.port}\n`);
+    // ─── Build for production (required for tunnel / remote access) ──────────
 
-    // Require AUTH_SECRET — refuse to start with the default hardcoded value
-    if (!process.env.AUTH_SECRET) {
-      console.error(
-        'ERROR: AUTH_SECRET is not set.\n' +
-        'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
-        'Then add it to your shell profile or .env file.'
-      );
-      process.exit(1);
+    if (options.build) {
+      console.log('\nBuilding dashboard for production...');
+      try {
+        execSync('npm run build', { cwd: dashboardDir, stdio: 'inherit', timeout: 300000,
+          env: { ...process.env, AUTH_SECRET: authSecret, ADMIN_PASSWORD: adminPassword,
+                 ADMIN_USERNAME: adminUsername, CTX_ROOT: ctxRoot } });
+      } catch (err) {
+        console.error('Dashboard build failed:', err);
+        process.exit(1);
+      }
     }
 
-    // Ensure AUTH_TRUST_HOST is set for local development
+    // ─── Build .env.local so Next.js can pick up vars ─────────────────────────
+
+    const nextEnvPath = join(dashboardDir, '.env.local');
+    const nextEnvLines = [
+      `AUTH_SECRET=${authSecret}`,
+      `ADMIN_USERNAME=${adminUsername}`,
+      `ADMIN_PASSWORD=${adminPassword}`,
+      `CTX_ROOT=${ctxRoot}`,
+      `CTX_FRAMEWORK_ROOT=${process.cwd()}`,
+      `CTX_INSTANCE_ID=${options.instance}`,
+    ];
+    writeFileSync(nextEnvPath, nextEnvLines.join('\n') + '\n', 'utf-8');
+    try { chmodSync(nextEnvPath, 0o600); } catch { /* ignore on Windows */ }
+
+    // ─── Start server ─────────────────────────────────────────────────────────
+
     const dashEnv = {
       ...process.env,
       PORT: options.port,
+      AUTH_SECRET: authSecret,
+      ADMIN_USERNAME: adminUsername,
+      ADMIN_PASSWORD: adminPassword,
+      CTX_ROOT: ctxRoot,
+      CTX_FRAMEWORK_ROOT: process.cwd(),
+      CTX_INSTANCE_ID: options.instance,
       AUTH_TRUST_HOST: process.env.AUTH_TRUST_HOST || 'true',
     };
 
-    const child = spawn('npx', ['next', 'dev', '--port', options.port], {
+    const startMode = options.build ? 'start' : 'dev';
+    const startArgs = startMode === 'start'
+      ? ['next', 'start', '--port', options.port]
+      : ['next', 'dev', '--port', options.port];
+
+    console.log(`\nDashboard starting on http://localhost:${options.port}`);
+    console.log(`  Admin: ${adminUsername} / ${adminPassword}`);
+    if (options.build) {
+      console.log('  Mode: production');
+    } else {
+      console.log('  Mode: dev (use --build for production/tunnel use)');
+    }
+    console.log('');
+
+    const child = spawn('npx', startArgs, {
       cwd: dashboardDir,
       stdio: 'inherit',
       env: dashEnv,
@@ -64,10 +157,7 @@ export const dashboardCommand = new Command('dashboard')
       process.exit(code || 0);
     });
 
-    // Forward SIGINT/SIGTERM
-    const cleanup = () => {
-      child.kill('SIGTERM');
-    };
+    const cleanup = () => { child.kill('SIGTERM'); };
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
   });

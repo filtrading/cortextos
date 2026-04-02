@@ -1,35 +1,135 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, platform } from 'os';
+import { execSync, spawn } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+
+const IS_WINDOWS = platform() === 'win32';
+
+function commandExists(cmd: string): boolean {
+  try {
+    execSync(IS_WINDOWS ? `where ${cmd}` : `which ${cmd}`, { stdio: 'pipe' });
+    return true;
+  } catch { return false; }
+}
 
 export const startCommand = new Command('start')
   .argument('[agent]', 'Specific agent to start (starts all if omitted)')
   .option('--instance <id>', 'Instance ID', 'default')
-  .description('Start the daemon or a specific agent')
-  .action(async (agent: string | undefined, options: { instance: string }) => {
+  .option('--foreground', 'Run daemon in foreground (no PM2, for debugging)')
+  .description('Start the cortextOS daemon and agents')
+  .action(async (agent: string | undefined, options: { instance: string; foreground?: boolean }) => {
     const ipc = new IPCClient(options.instance);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (!daemonRunning) {
-      console.log('Starting cortextOS daemon...');
-      console.log('');
-      console.log('To start the daemon with PM2 for persistence:');
-      console.log('');
-      console.log('  pm2 start ecosystem.config.js');
-      console.log('  pm2 save');
-      console.log('');
-      console.log('Or run directly (foreground):');
-      console.log('');
-      console.log('  node dist/daemon.js');
-      console.log('');
+      const projectRoot = process.cwd();
+      const daemonScript = join(projectRoot, 'dist', 'daemon.js');
 
-      // For direct start without PM2, we could spawn the daemon here
-      // but per D5, PM2 is the recommended approach
+      if (!existsSync(daemonScript)) {
+        console.error('Daemon not built. Run: npm run build');
+        process.exit(1);
+      }
+
+      const ctxRoot = join(homedir(), '.cortextos', options.instance);
+
+      // Try reading org from enabled-agents.json
+      let org = '';
+      const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
+      if (existsSync(enabledPath)) {
+        try {
+          const agents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
+          const first = Object.values(agents as Record<string, any>)[0] as any;
+          if (first?.org) org = first.org;
+        } catch { /* ignore */ }
+      }
+
+      const daemonEnv = {
+        ...process.env,
+        CTX_INSTANCE_ID: options.instance,
+        CTX_ROOT: ctxRoot,
+        CTX_FRAMEWORK_ROOT: projectRoot,
+        CTX_PROJECT_ROOT: projectRoot,
+        ...(org ? { CTX_ORG: org } : {}),
+      };
+
+      if (options.foreground) {
+        // Run in foreground (blocking) — useful for debugging
+        console.log('Starting cortextOS daemon in foreground...');
+        console.log('(Press Ctrl+C to stop)\n');
+        const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
+          stdio: 'inherit',
+          env: daemonEnv,
+        });
+        child.on('exit', (code) => process.exit(code || 0));
+        process.on('SIGINT', () => child.kill('SIGTERM'));
+        process.on('SIGTERM', () => child.kill('SIGTERM'));
+        return;
+      }
+
+      if (commandExists('pm2')) {
+        // PM2 available — use ecosystem or direct pm2 start
+        const ecosystemPath = join(projectRoot, 'ecosystem.config.js');
+        if (existsSync(ecosystemPath)) {
+          console.log('Starting cortextOS daemon via PM2...');
+          try {
+            execSync('pm2 start ecosystem.config.js', { stdio: 'inherit', cwd: projectRoot });
+            execSync('pm2 save', { stdio: 'inherit', cwd: projectRoot });
+            console.log('\nDaemon started. Use `cortextos status` to check agents.');
+          } catch {
+            console.error('PM2 start failed. Try: pm2 start ecosystem.config.js');
+          }
+        } else {
+          console.log('Generating ecosystem.config.js and starting...');
+          try {
+            execSync(`node ${JSON.stringify(join(projectRoot, 'dist', 'cli.js'))} ecosystem`, {
+              stdio: 'inherit',
+              cwd: projectRoot,
+              env: daemonEnv,
+            });
+            execSync('pm2 start ecosystem.config.js', { stdio: 'inherit', cwd: projectRoot });
+            execSync('pm2 save', { stdio: 'inherit', cwd: projectRoot });
+            console.log('\nDaemon started. Use `cortextos status` to check agents.');
+          } catch {
+            console.error('Failed to generate ecosystem and start. Try manually:');
+            console.error('  cortextos ecosystem && pm2 start ecosystem.config.js');
+          }
+        }
+      } else {
+        // No PM2 — spawn daemon detached in background
+        console.log('PM2 not found. Starting daemon directly (background)...');
+        console.log('(Install PM2 for persistence across reboots: npm install -g pm2)\n');
+
+        const logDir = join(ctxRoot, 'logs');
+        const logFile = join(logDir, 'daemon.log');
+
+        const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
+          detached: true,
+          stdio: ['ignore', 'ignore', 'ignore'],
+          env: daemonEnv,
+          cwd: projectRoot,
+        });
+        child.unref();
+
+        // Give it a moment to start
+        await new Promise(r => setTimeout(r, 1500));
+
+        const ipc2 = new IPCClient(options.instance);
+        const running = await ipc2.isDaemonRunning();
+        if (running) {
+          console.log('Daemon started successfully (background process).');
+          console.log('Note: daemon will stop if you close this terminal session.');
+          console.log('Install PM2 for persistence: npm install -g pm2');
+        } else {
+          console.log('Daemon spawned. Check logs if agents do not appear:');
+          console.log(`  ${logFile}`);
+        }
+      }
       return;
     }
 
+    // Daemon already running
     if (agent) {
       console.log(`Starting agent: ${agent}`);
       const response = await ipc.send({ type: 'start-agent', agent });
@@ -39,7 +139,6 @@ export const startCommand = new Command('start')
         console.error(`  Error: ${response.error}`);
       }
     } else {
-      // Show status of all agents
       const response = await ipc.send({ type: 'status' });
       if (response.success) {
         const statuses = response.data as any[];
