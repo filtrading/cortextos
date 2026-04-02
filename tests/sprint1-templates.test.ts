@@ -27,6 +27,17 @@ describe('Sprint 1: Template Completeness', () => {
       expect(config.crons[0].interval).toBe('4h');
     });
 
+    it('goals.json exists with all expected fields', () => {
+      const goalsPath = join(agentDir, 'goals.json');
+      expect(existsSync(goalsPath), 'Missing goals.json').toBe(true);
+      const goals = JSON.parse(readFileSync(goalsPath, 'utf-8'));
+      expect(goals).toHaveProperty('focus');
+      expect(goals).toHaveProperty('goals');
+      expect(goals).toHaveProperty('bottleneck');
+      expect(goals).toHaveProperty('updated_at');
+      expect(goals).toHaveProperty('updated_by');
+    });
+
     it('has .claude/settings.json with hooks', () => {
       const settingsPath = join(agentDir, '.claude', 'settings.json');
       expect(existsSync(settingsPath)).toBe(true);
@@ -136,6 +147,17 @@ describe('Sprint 1: Template Completeness', () => {
       expect(cronNames).toContain('evening-review');
     });
 
+    it('goals.json exists with all expected fields', () => {
+      const goalsPath = join(orchDir, 'goals.json');
+      expect(existsSync(goalsPath), 'Missing goals.json').toBe(true);
+      const goals = JSON.parse(readFileSync(goalsPath, 'utf-8'));
+      expect(goals).toHaveProperty('focus');
+      expect(goals).toHaveProperty('goals');
+      expect(goals).toHaveProperty('bottleneck');
+      expect(goals).toHaveProperty('updated_at');
+      expect(goals).toHaveProperty('updated_by');
+    });
+
     it('has 11 skills including orchestrator-specific ones', () => {
       const expectedSkills = [
         'autoresearch', 'comms', 'cron-management', 'tasks',
@@ -203,6 +225,17 @@ describe('Sprint 1: Template Completeness', () => {
       expect(cronNames).toContain('catalog-browse');
       expect(config.ecosystem).toBeDefined();
       expect(config.ecosystem.local_version_control).toBeDefined();
+    });
+
+    it('goals.json exists with all expected fields', () => {
+      const goalsPath = join(analystDir, 'goals.json');
+      expect(existsSync(goalsPath), 'Missing goals.json').toBe(true);
+      const goals = JSON.parse(readFileSync(goalsPath, 'utf-8'));
+      expect(goals).toHaveProperty('focus');
+      expect(goals).toHaveProperty('goals');
+      expect(goals).toHaveProperty('bottleneck');
+      expect(goals).toHaveProperty('updated_at');
+      expect(goals).toHaveProperty('updated_by');
     });
 
     it('has 10 skills including analyst-specific ones', () => {
