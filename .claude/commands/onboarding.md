@@ -275,7 +275,7 @@ Walk through step by step:
 
 After token paste:
 
-7. "Now send any message to your new bot on Telegram (just 'hi' is fine). This lets me detect your chat ID so that only you can message your agent. You can configure other chat IDs later so other members of your team can you cortextOS as well."
+7. "Now send any message to your new bot on Telegram (just 'hi' is fine). This lets me detect your chat ID so that only you can message your agent. You can configure other chat IDs later so other members of your team can use cortextOS as well."
 
 Wait for confirmation, then auto-detect. Use long polling (timeout=30) so Telegram holds the connection open until a message arrives instead of returning empty immediately. This is critical for newly created bots where there's propagation delay:
 

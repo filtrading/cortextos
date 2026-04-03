@@ -81,24 +81,25 @@ Send via Telegram:
 ### Step 5: Explain goal cascade authority
 
 Send via Telegram:
-> "One important thing: as orchestrator, I have authority to write goals for your other agents. Each morning I update each agent's goals.json based on our north star and your daily focus - they don't have a say in this, I set the direction. This keeps the whole team aligned.
+> "One important thing: as orchestrator, I have authority to write goals for your other agents. Each morning I update each agent's goals based on our north star and your daily focus - they don't have a say in this, I set the direction. This keeps the whole team aligned.
 >
-> You can always override by messaging me, messaging your agents directly, or editing their goals.json directly. Is this workflow okay with you?"
+> You can always override by messaging me, messaging your agents directly, or editing their goals directly. Is this workflow okay with you?"
 
 **END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, write their answer to SOUL.md under Autonomy Rules, then continue from Step 6.
 
 ### Step 6: Explain nighttime-mode guardrails
 
 Send via Telegram:
-> "Outside your day hours ([day_start]-[day_end] [timezone]), I shift into nighttime mode. Overnight guardrails:
+> "While you're offline ([day_end]-[day_start] [timezone]), I keep the system moving. Your agents continue working - building features, running research, preparing drafts. I coordinate their overnight work, review their output, and queue everything for your morning briefing.
 >
-> - No external comms (emails, posts, messages outside the system)
-> - No purchases or financial actions
-> - No data deletion
-> - No production deploys (agents prep PRs, nothing merges)
-> - No new approval requests (queued for morning)
+> The only things I hold back overnight:
+> - External comms (emails, posts, messages outside the system)
+> - Financial actions
+> - Data deletion
+> - Production deploys (agents prep PRs, I queue merges for morning)
+> - New approval requests (batched for when you're back)
 >
-> Everything external waits until you're back online. Sound right?"
+> You can customize this anytime. Want to adjust any of these, or does this work?"
 
 **END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, continue from Step 7.
 
@@ -415,30 +416,47 @@ The analyst is the orchestrator's partner for system health monitoring and the t
 ### Step 24: Create analyst bot
 
 Tell the user:
-> "Last thing - let's get your analyst agent online. The analyst monitors system health, runs the theta-wave improvement cycle with me, and keeps an eye on performance metrics across the whole team.
+> "Last step - setting up your analyst agent. The analyst is a core part of the system - it monitors health across all agents, runs the theta-wave improvement cycle with me, and keeps performance metrics. Without it, you lose system self-improvement and health monitoring.
 >
-> To set it up:
+> To create it:
 > 1. Open @BotFather on Telegram
-> 2. Send `/newbot` and follow the prompts
+> 2. Send the command /newbot and follow the prompts
 > 3. Copy the bot token it gives you and send it here"
 
 **END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply with the bot token will be delivered as your next conversation turn. When you receive it, continue from Step 25.
 
 ### Step 25: Get the analyst's chat ID
 
+Tell the user: "Got it. Now send the command /start to your new analyst bot, then send it any message (like 'hello'), then tell me when you've done that."
+
+**END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, try to get the chat ID with retries:
+
 ```bash
-# After user sends /start to the new bot and sends a message:
-curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates?timeout=30" | jq '.result[-1].message.chat.id'
+TOKEN="<token from user>"
+CHAT_ID=""
+for i in 1 2 3; do
+  RESULT=$(curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates?timeout=30" | jq -r '.result[-1].message.chat.id // empty')
+  if [ -n "$RESULT" ] && [ "$RESULT" != "null" ]; then
+    CHAT_ID="$RESULT"
+    break
+  fi
+  echo "Attempt $i: no messages yet, retrying..."
+  sleep 5
+done
+
+if [ -z "$CHAT_ID" ]; then
+  # Ask user to try again
+  cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Still not seeing a message to the bot. Can you send another message to it? Make sure you sent the command /start first."
+  # END TURN and retry on next user message
+fi
 ```
 
-Tell the user: "Got it. Send /start and then any message to your new analyst bot, then tell me when you've done that."
-
-**END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, auto-detect the chat ID using the curl command above, then continue from Step 26.
+If all retries fail, end your turn and wait for the user to confirm they've sent another message, then retry.
 
 ### Step 26: Create and enable the analyst agent
 
 ```bash
-cortextos add-agent <analyst_name> --template analyst --org $CTX_ORG
+cd "$CTX_FRAMEWORK_ROOT" && cortextos add-agent <analyst_name> --template analyst --org $CTX_ORG
 
 # Write .env for the analyst
 # IMPORTANT: ALLOWED_USER must be the NUMERIC Telegram user ID (e.g. 7940429114), NOT a username.
@@ -451,6 +469,24 @@ EOF
 chmod 600 "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/agents/<analyst_name>/.env"
 
 cortextos start <analyst_name>
+```
+
+### Step 26b: Verify analyst is registered
+
+```bash
+# Verify the analyst appears in enabled-agents.json
+ENABLED_FILE="$CTX_ROOT/config/enabled-agents.json"
+if ! jq -e '."<analyst_name>"' "$ENABLED_FILE" > /dev/null 2>&1; then
+  echo "WARNING: Analyst not in enabled-agents.json, adding now..."
+  jq --arg name "<analyst_name>" --arg org "$CTX_ORG" \
+    '. + {($name): {"enabled": true, "status": "configured", "org": $org}}' \
+    "$ENABLED_FILE" > /tmp/enabled.tmp && mv /tmp/enabled.tmp "$ENABLED_FILE"
+fi
+
+# Verify the agent directory is in the correct location
+if [ ! -d "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/agents/<analyst_name>" ]; then
+  echo "ERROR: Analyst directory not found at expected path. Check if it was created in a nested directory."
+fi
 ```
 
 ### Step 27: Hand off to the analyst for onboarding
@@ -467,6 +503,11 @@ Log the handoff:
 cortextos bus log-event action analyst_onboarding_handoff info --meta '{"agent":"'$CTX_AGENT_NAME'","analyst":"<analyst_name>"}'
 ```
 
+> **Important: When creating specialist agents later, the same safeguards apply:**
+> - Always run from the framework root: `cd "$CTX_FRAMEWORK_ROOT" && cortextos add-agent <name> --template agent --org $CTX_ORG`
+> - Set `ALLOWED_USER` to the numeric Telegram user ID (same as orchestrator's), not a username
+> - After creation, verify the agent appears in `enabled-agents.json` and add it if missing (same as Step 26b)
+
 ---
 
 ## Notes
@@ -474,4 +515,4 @@ cortextos bus log-event action analyst_onboarding_handoff info --meta '{"agent":
 - Do not send the online status message until Step 23 confirmation is complete
 - Do not start normal operations (crons, heartbeat) until Step 24 (.onboarded flag is written)
 - If onboarding is interrupted, check which steps completed (look at which files exist) and resume from the first incomplete step
-- The analyst setup (Part 10) can be deferred if the user doesn't have a bot token ready - note it as a pending human task
+- The analyst setup (Part 10) is required for a complete system. If the user can't create a bot token right now, create a [HUMAN] task and block until it's done - do not mark onboarding complete without an analyst.
