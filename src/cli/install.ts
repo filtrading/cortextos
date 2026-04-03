@@ -1,7 +1,7 @@
 import { Command } from 'commander';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { homedir, platform } from 'os';
+import { homedir, platform, arch } from 'os';
 import { execSync, spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
 
@@ -138,6 +138,38 @@ export const installCommand = new Command('install')
       }
       console.error('    Then run: npm install (in the cortextOS directory)');
       process.exit(1);
+    }
+
+    // Fix node-pty spawn-helper permissions (npm doesn't reliably preserve executable bits on prebuilds)
+    if (!IS_WINDOWS) {
+      const fixed = fixSpawnHelper(process.cwd());
+      if (fixed) {
+        console.log('  ✓ node-pty: spawn-helper permissions fixed');
+      }
+    }
+
+    // Smoke test: verify node-pty can actually spawn a process
+    if (!IS_WINDOWS) {
+      try {
+        const pty = require('node-pty');
+        let output = '';
+        const p = pty.spawn('/bin/echo', ['pty-ok'], { name: 'xterm-256color', cols: 80, rows: 24 });
+        await new Promise<void>((resolve, reject) => {
+          p.onData((data: string) => { output += data; });
+          p.onExit(({ exitCode }: { exitCode: number }) => {
+            if (exitCode === 0 && output.includes('pty-ok')) resolve();
+            else reject(new Error(`spawn test failed (exit ${exitCode})`));
+          });
+          setTimeout(() => reject(new Error('spawn test timed out')), 5000);
+        });
+        console.log('  ✓ node-pty: spawn test passed');
+      } catch (err) {
+        console.error('  ✗ node-pty: spawn test failed');
+        console.error(`    Error: ${(err as Error).message}`);
+        console.error('    The daemon will not be able to start agents.');
+        console.error('    Try: npm rebuild node-pty');
+        process.exit(1);
+      }
     }
 
     // PM2 — required for daemon persistence
@@ -284,3 +316,47 @@ export const installCommand = new Command('install')
     console.log('    3. cortextos ecosystem && pm2 start ecosystem.config.js');
     console.log('    4. cortextos dashboard\n');
   });
+
+/**
+ * Fix node-pty spawn-helper permissions on Unix.
+ * npm doesn't reliably preserve executable bits on prebuild binaries,
+ * which causes posix_spawnp to fail on macOS/Linux.
+ * Scans all prebuild directories and ensures spawn-helper is executable.
+ */
+function fixSpawnHelper(projectRoot: string): boolean {
+  const prebuildsDir = join(projectRoot, 'node_modules', 'node-pty', 'prebuilds');
+  const buildRelease = join(projectRoot, 'node_modules', 'node-pty', 'build', 'Release');
+  let fixed = false;
+
+  // Check prebuilds (used when no local compilation)
+  if (existsSync(prebuildsDir)) {
+    try {
+      for (const platformDir of readdirSync(prebuildsDir)) {
+        const helperPath = join(prebuildsDir, platformDir, 'spawn-helper');
+        if (existsSync(helperPath)) {
+          try {
+            const mode = statSync(helperPath).mode;
+            if ((mode & 0o111) === 0) {
+              chmodSync(helperPath, 0o755);
+              fixed = true;
+            }
+          } catch { /* skip individual files that can't be stat'd */ }
+        }
+      }
+    } catch { /* prebuilds dir unreadable */ }
+  }
+
+  // Check build/Release (used when compiled from source)
+  const buildHelper = join(buildRelease, 'spawn-helper');
+  if (existsSync(buildHelper)) {
+    try {
+      const mode = statSync(buildHelper).mode;
+      if ((mode & 0o111) === 0) {
+        chmodSync(buildHelper, 0o755);
+        fixed = true;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return fixed;
+}

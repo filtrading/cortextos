@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -80,6 +80,68 @@ export const doctorCommand = new Command('doctor')
           ? 'Install Visual C++ Build Tools: npm install -g windows-build-tools'
           : 'Install build tools: xcode-select --install (macOS) or apt install build-essential (Linux)',
       });
+    }
+
+    // Fix spawn-helper permissions and test actual spawn capability (Unix only)
+    if (process.platform !== 'win32') {
+      const prebuildsDir = join(process.cwd(), 'node_modules', 'node-pty', 'prebuilds');
+      const buildRelease = join(process.cwd(), 'node_modules', 'node-pty', 'build', 'Release');
+      let permFixed = false;
+
+      // Fix permissions on all spawn-helper binaries
+      for (const dir of [prebuildsDir, buildRelease]) {
+        if (!existsSync(dir)) continue;
+        try {
+          const entries = dir === prebuildsDir ? readdirSync(dir) : ['.'];
+          for (const entry of entries) {
+            const helperPath = dir === prebuildsDir
+              ? join(dir, entry, 'spawn-helper')
+              : join(dir, 'spawn-helper');
+            if (existsSync(helperPath)) {
+              const mode = statSync(helperPath).mode;
+              if ((mode & 0o111) === 0) {
+                chmodSync(helperPath, 0o755);
+                permFixed = true;
+              }
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      if (permFixed) {
+        checks.push({
+          name: 'node-pty spawn-helper',
+          status: 'warn',
+          message: 'Permissions were missing - fixed automatically',
+        });
+      }
+
+      // Actual spawn test
+      try {
+        const pty = require('node-pty');
+        let output = '';
+        const p = pty.spawn('/bin/echo', ['pty-ok'], { name: 'xterm-256color', cols: 80, rows: 24 });
+        await new Promise<void>((resolve, reject) => {
+          p.onData((data: string) => { output += data; });
+          p.onExit(({ exitCode }: { exitCode: number }) => {
+            if (exitCode === 0 && output.includes('pty-ok')) resolve();
+            else reject(new Error(`exit ${exitCode}`));
+          });
+          setTimeout(() => reject(new Error('timed out')), 5000);
+        });
+        checks.push({
+          name: 'node-pty spawn test',
+          status: 'pass',
+          message: 'Can spawn processes',
+        });
+      } catch (err) {
+        checks.push({
+          name: 'node-pty spawn test',
+          status: 'fail',
+          message: `Cannot spawn processes: ${(err as Error).message}`,
+          fix: 'Try: npm rebuild node-pty',
+        });
+      }
     }
 
     // Check state directory

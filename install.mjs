@@ -8,7 +8,7 @@
  */
 
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 
@@ -423,6 +423,31 @@ try {
     console.error('    npm install -g windows-build-tools  (run as Administrator)');
   }
   process.exit(1);
+}
+
+// ─── 8b. Fix node-pty spawn-helper permissions ───────────────────────────────
+// npm doesn't reliably preserve executable bits on prebuild binaries.
+// This causes posix_spawnp to fail on macOS/Linux when the daemon tries to spawn agents.
+
+if (!IS_WINDOWS) {
+  const prebuilds = join(INSTALL_DIR, 'node_modules', 'node-pty', 'prebuilds');
+  const buildRel = join(INSTALL_DIR, 'node_modules', 'node-pty', 'build', 'Release');
+  let fixed = false;
+
+  if (existsSync(prebuilds)) {
+    try {
+      for (const d of readdirSync(prebuilds)) {
+        const h = join(prebuilds, d, 'spawn-helper');
+        if (existsSync(h) && (statSync(h).mode & 0o111) === 0) { chmodSync(h, 0o755); fixed = true; }
+      }
+    } catch { /* skip */ }
+  }
+  const bh = join(buildRel, 'spawn-helper');
+  if (existsSync(bh)) {
+    try { if ((statSync(bh).mode & 0o111) === 0) { chmodSync(bh, 0o755); fixed = true; } } catch { /* skip */ }
+  }
+
+  if (fixed) ok('Fixed node-pty spawn-helper permissions');
 }
 
 // ─── 9. Build ─────────────────────────────────────────────────────────────────
