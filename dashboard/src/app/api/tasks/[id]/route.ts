@@ -157,7 +157,7 @@ export async function PUT(
             'normal',
             `Task reassigned to you: [${id}] ${taskData.title}`,
           ],
-          { timeout: 5000, stdio: 'pipe', env: { ...process.env, CTX_FRAMEWORK_ROOT: getFrameworkRoot(), CTX_ROOT: getCTXRoot(), CTX_AGENT_NAME: 'dashboard', CTX_ORG: task?.org || '' } },
+          { timeout: 5000, stdio: 'pipe', env: { ...process.env, CTX_FRAMEWORK_ROOT: getFrameworkRoot(), CTX_ROOT: getCTXRoot(), CTX_INSTANCE_ID: process.env.CTX_INSTANCE_ID ?? 'default', CTX_AGENT_NAME: 'dashboard', CTX_ORG: task?.org || '' } },
         );
       } catch { /* non-fatal */ }
     }
@@ -217,6 +217,7 @@ export async function PATCH(
     ...process.env,
     CTX_FRAMEWORK_ROOT: frameworkRoot,
     CTX_ROOT: getCTXRoot(),
+    CTX_INSTANCE_ID: process.env.CTX_INSTANCE_ID ?? 'default',
     CTX_AGENT_NAME: 'dashboard',
     CTX_ORG: task?.org || '',
   };

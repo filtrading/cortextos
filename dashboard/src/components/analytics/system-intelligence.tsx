@@ -19,7 +19,7 @@ export function SystemIntelligence({ latestReport }: SystemIntelligenceProps) {
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground py-4 text-center">
-            System intelligence data will appear here once collect-analytics.sh runs.
+            System intelligence data will appear here once agents start generating activity reports.
           </p>
         </CardContent>
       </Card>

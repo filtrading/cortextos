@@ -1,25 +1,14 @@
 import { NextRequest } from 'next/server';
 import { initWatcher, onSSEEvent } from '@/lib/watcher';
-import { jwtVerify } from 'jose';
+import { auth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  // Security (H7): Authenticate SSE via ?token=<jwt> (EventSource cannot send headers).
-  const token = new URL(request.url).searchParams.get('token');
-  if (!token) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-  const authSecret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
-  if (!authSecret) {
-    console.error('[sse] AUTH_SECRET not set — refusing SSE connection');
-    return new Response('Server misconfiguration', { status: 500 });
-  }
-  try {
-    const secret = new TextEncoder().encode(authSecret);
-    await jwtVerify(token, secret);
-  } catch {
+  // Security (H7): Authenticate SSE via NextAuth session cookie.
+  const session = await auth();
+  if (!session) {
     return new Response('Unauthorized', { status: 401 });
   }
   // Auth passed — proceed with stream

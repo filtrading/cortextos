@@ -285,7 +285,8 @@ export async function deleteUser(userId: number): Promise<ActionResult> {
 
 export async function fetchOrgMetadata() {
   const orgs = getOrgs();
-  const org = orgs[0] ?? '';
+  // Find the first org that has a context.json (skip empty/unconfigured orgs)
+  const org = orgs.find(o => fs.existsSync(getOrgContextPath(o))) ?? orgs[0] ?? '';
   if (!org) {
     return { context: { name: '', description: '', industry: '', icp: '', value_prop: '' }, brandVoice: '' };
   }

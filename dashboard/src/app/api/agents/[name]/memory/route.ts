@@ -29,7 +29,17 @@ export async function GET(
     // Security (C3): Confine path reads to this agent's own directory.
     // path.resolve() neutralizes any ../ traversal before startsWith comparison.
     const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT ?? homedir();
-    const orgName = searchParams.get('org') ?? 'lifeos';
+    // Auto-discover org if not provided — avoids 403 when org param is missing
+    let orgName = searchParams.get('org');
+    if (!orgName) {
+      for (const org of getOrgs()) {
+        if (getAgentsForOrg(org).includes(decoded)) {
+          orgName = org;
+          break;
+        }
+      }
+      orgName = orgName ?? getOrgs()[0] ?? 'default';
+    }
     const agentDir = path.resolve(frameworkRoot, 'orgs', orgName, 'agents', decoded);
     const resolved = path.resolve(agentDir, filePath);
 

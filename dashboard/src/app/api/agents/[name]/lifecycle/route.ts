@@ -14,7 +14,7 @@ function isValidName(name: string): boolean {
   return /^[a-z0-9_-]+$/.test(name);
 }
 
-const VALID_ACTIONS = ['enable', 'disable', 'restart'];
+const VALID_ACTIONS = ['enable', 'disable', 'restart', 'start', 'stop', 'restart_continue', 'restart_fresh'];
 
 // Security (C4): Validate org and name against allowlist before use in shell commands or path.join.
 function validateIdentifier(value: string | null | undefined, field: string): string {
@@ -48,17 +48,26 @@ export async function POST(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { action, org } = body as {
+  const { action: rawAction, org } = body as {
     action?: string;
     org?: string;
   };
 
-  if (!action || !VALID_ACTIONS.includes(action)) {
+  if (!rawAction || !VALID_ACTIONS.includes(rawAction)) {
     return Response.json(
       { error: `action must be one of: ${VALID_ACTIONS.join(', ')}` },
       { status: 400 },
     );
   }
+
+  // Normalize UI action names to IPC action names
+  const action = rawAction === 'start' ? 'enable'
+    : rawAction === 'stop' ? 'disable'
+    : rawAction === 'restart_continue' || rawAction === 'restart_fresh' ? 'restart'
+    : rawAction;
+  const restartMode = rawAction === 'restart_continue' ? 'continue'
+    : rawAction === 'restart_fresh' ? 'fresh'
+    : undefined;
 
   // Security (C4): Validate org before use in shell commands.
   let safeOrg: string | undefined;
@@ -119,7 +128,7 @@ export async function POST(
       }
 
       case 'restart': {
-        ipcResult = await ipc.send({ type: 'restart-agent', agent: decoded });
+        ipcResult = await ipc.send({ type: 'restart-agent', agent: decoded, ...(restartMode ? { mode: restartMode } : {}) });
         registryMessage = '';
         break;
       }

@@ -91,10 +91,12 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Internal error' }, { status: 500 });
   }
 
+  const instanceId = process.env.CTX_INSTANCE_ID ?? 'default';
   const env = {
     ...process.env,
     CTX_FRAMEWORK_ROOT: frameworkRoot,
     CTX_ROOT: getCTXRoot(),
+    CTX_INSTANCE_ID: instanceId,
     CTX_AGENT_NAME: 'dashboard',
     CTX_ORG: org,
   };

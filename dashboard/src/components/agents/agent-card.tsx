@@ -46,6 +46,11 @@ export function AgentCard({ agent }: AgentCardProps) {
                   <p className="text-sm font-semibold leading-tight">{agent.name}</p>
                   <HealthDot status={agent.health} />
                 </div>
+                {agent.systemName && agent.systemName !== agent.name && (
+                  <p className="text-[10px] font-mono text-muted-foreground/60 mt-0.5">
+                    {agent.systemName}
+                  </p>
+                )}
                 {agent.role && (
                   <p className="text-[11px] text-muted-foreground truncate max-w-[180px] mt-0.5">
                     {agent.role}

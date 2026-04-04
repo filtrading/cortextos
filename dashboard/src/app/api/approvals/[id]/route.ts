@@ -101,6 +101,7 @@ export async function PATCH(
     ...process.env,
     CTX_FRAMEWORK_ROOT: frameworkRoot,
     CTX_ROOT: getCTXRoot(),
+    CTX_INSTANCE_ID: process.env.CTX_INSTANCE_ID ?? 'default',
     CTX_AGENT_NAME: 'dashboard',
     CTX_ORG: approval.org || '',
   };

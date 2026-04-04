@@ -2,15 +2,15 @@ module.exports = {
   "apps": [
     {
       "name": "cortextos-daemon",
-      "script": "/Users/cortextos/cortextos-test/dist/daemon.js",
-      "args": "--instance e2e-test",
-      "cwd": "/Users/cortextos/cortextos-test",
+      "script": "/Users/cortextos/cortextos-v2/dist/daemon.js",
+      "args": "--instance lifeos2",
+      "cwd": "/Users/cortextos/cortextos-v2",
       "env": {
-        "CTX_INSTANCE_ID": "e2e-test",
-        "CTX_ROOT": "/Users/cortextos/.cortextos/e2e-test",
-        "CTX_FRAMEWORK_ROOT": "/Users/cortextos/cortextos-test",
-        "CTX_PROJECT_ROOT": "/Users/cortextos/cortextos-test",
-        "CTX_ORG": "acme"
+        "CTX_INSTANCE_ID": "lifeos2",
+        "CTX_ROOT": "/Users/cortextos/.cortextos/lifeos2",
+        "CTX_FRAMEWORK_ROOT": "/Users/cortextos/cortextos-v2",
+        "CTX_PROJECT_ROOT": "/Users/cortextos/cortextos-v2",
+        "CTX_ORG": "lifeos2"
       },
       "max_restarts": 10,
       "restart_delay": 5000,

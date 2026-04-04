@@ -606,6 +606,20 @@ if (pty) {
 
 ---
 
+## 44. Orphaned dashboard processes serve stale cross-instance data on competing ports
+
+**What happens:** When `cortextos dashboard` is stopped and restarted (or when pm2 restarts it), the old Next.js server process (`next-server`) is not always fully killed. The orphan keeps listening on its port (e.g., 3002) while the new server starts on its configured port (3001). The tunnel points to 3001 (clean data) but if the user ever connects directly to the machine's IP or a cached bookmark, they hit port 3002 and see old system data. Also causes confusion when diagnosing which process is serving which data.
+
+**Evidence:** April 3, 2026 — two `next-server` processes running simultaneously: one on 3001 (clean lifeos2), one on 3002 (old default instance data, started at 1:23PM). Dashboard appeared to "bleed" from old system.
+
+**Fix needed:**
+- `cortextos dashboard` CLI should check for existing `next-server` processes on the target port and kill them before starting
+- Or: always use a fixed port per instance and document it clearly
+- Add a startup log line confirming which port and CTX_ROOT are active so orphans are easy to spot
+- pm2 `delete` before `start` rather than `restart` to ensure clean process lifecycle
+
+---
+
 ## 43. Messages sent during agent restart are silently lost — no readiness indicator
 
 **What happens:** When an agent restarts (soft or hard), there is no visible indicator that it is booting vs ready to receive messages. Messages sent during the restart window (from session end to fast-checker resuming) are never delivered. No error, no retry, no notification — they disappear silently.
@@ -621,3 +635,24 @@ if (pty) {
 - On session end (before restart), send a "restarting, messages in the next ~60s may not reach me" warning
 - Dashboard: show `booting` status in the heartbeat panel for agents with a stale heartbeat (> 1 loop interval old)
 - Consider: have the fast-checker or daemon buffer messages received during restart and replay them once the new session starts
+
+---
+
+## 39. ecosystem.config.js uses CTX_INSTANCE_ID=default — IPC unreachable from lifeos2 context
+
+**Found by:** analyst2 (Sentinel2), 2026-04-04T00:47Z
+
+**What happens:** `ecosystem.config.js` starts the daemon with `CTX_INSTANCE_ID=default` and `CTX_ROOT=/Users/cortextos/.cortextos/default`. This means the daemon socket lives at `~/.cortextos/default/daemon.sock`. Any agent running with `CTX_INSTANCE_ID=lifeos2` that calls `cortextos status` or IPC commands (self-restart, soft-restart) gets "Daemon is not running" because it looks for `~/.cortextos/lifeos2/daemon.sock` which does not exist.
+
+**Impact:**
+- `cortextos status` always shows "Daemon is not running" from lifeos2 context
+- `cortextos bus self-restart` and `soft-restart-all` send IPC to the wrong socket path, silently failing
+- All IPC-based agent control is broken for lifeos2 agents
+- The daemon log shows agents being managed (paul2, donna2, boris2 receiving injections), so the daemon works, but agents cannot reach it
+
+**Workaround:** Prefix commands with `CTX_INSTANCE_ID=default` to use the correct socket path.
+
+**Fix needed:** Update `ecosystem.config.js` to use `CTX_INSTANCE_ID=lifeos2` and `CTX_ROOT=/Users/cortextos/.cortextos/lifeos2` for the lifeos2 org setup. Or: use the single correct instance for everything (lifeos2).
+
+**Severity:** High — IPC restart commands (self-restart, soft-restart-all) silently fail for all lifeos2 agents.
+
