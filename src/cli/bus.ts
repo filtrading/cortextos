@@ -13,6 +13,7 @@ import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collec
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
@@ -1397,3 +1398,106 @@ busCommand
   .command('hook-compact-telegram')
   .description('PreCompact hook: notify user via Telegram when context compaction starts (#18)')
   .action(() => runHook('hook-compact-telegram'));
+
+// --- OAuth token rotation commands ---
+
+busCommand
+  .command('check-usage-api')
+  .description('Fetch Claude OAuth utilization from Anthropic usage API (3-min TTL cache)')
+  .option('--account <name>', 'Check specific account (default: active account)')
+  .option('--force', 'Bypass cache and fetch fresh data')
+  .option('--json', 'Output as JSON')
+  .action(async (opts: { account?: string; force?: boolean; json?: boolean }) => {
+    const env = resolveEnv();
+    try {
+      const result = await checkUsageApi(env.ctxRoot, { force: opts.force, account: opts.account });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const cached = result.cached ? ' (cached)' : '';
+        const warn5h = result.five_hour_utilization >= ALERT_5H ? ' ⚠️' : '';
+        const warn7d = result.seven_day_utilization >= ALERT_7D ? ' ⚠️' : '';
+        console.log(`Account: ${result.account}${cached}`);
+        console.log(`5h utilization:  ${pct(result.five_hour_utilization)}${warn5h}`);
+        console.log(`7d utilization:  ${pct(result.seven_day_utilization)}${warn7d}`);
+        console.log(`Fetched at: ${result.fetched_at}`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('refresh-oauth-token')
+  .description('Refresh OAuth token for an account using its refresh_token (one-time use — writes atomically)')
+  .option('--account <name>', 'Account to refresh (default: active account)')
+  .action(async (opts: { account?: string }) => {
+    const env = resolveEnv();
+    try {
+      const result = await refreshOAuthToken(env.ctxRoot, opts.account);
+      const expiresIn = Math.round((result.expires_at - Date.now()) / 1000 / 60);
+      console.log(`Refreshed account: ${result.account}`);
+      console.log(`New token expires in: ${expiresIn} minutes`);
+    } catch (err) {
+      console.error(`Error: ${err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('rotate-oauth')
+  .description('Rotate to the next OAuth account if utilization thresholds are met')
+  .option('--force', 'Force rotation regardless of utilization')
+  .option('--agent <name>', 'Only update this agent\'s .env (default: all agents in org)')
+  .option('--reason <text>', 'Reason for rotation (logged)')
+  .option('--json', 'Output as JSON')
+  .action(async (opts: { force?: boolean; agent?: string; reason?: string; json?: boolean }) => {
+    const env = resolveEnv();
+    if (!env.frameworkRoot) {
+      console.error('CTX_FRAMEWORK_ROOT is required for rotate-oauth');
+      process.exit(1);
+    }
+    try {
+      const result = await rotateOAuth(env.ctxRoot, env.frameworkRoot, env.org, {
+        force: opts.force,
+        agent: opts.agent,
+        reason: opts.reason,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.rotated) {
+        console.log(`Rotated: ${result.from} → ${result.to}`);
+        console.log(`Reason: ${result.reason}`);
+      } else {
+        console.log(`No rotation needed: ${result.reason}`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('list-oauth-accounts')
+  .description('List all OAuth accounts and their utilization')
+  .action((opts: Record<string, unknown>) => {
+    const env = resolveEnv();
+    const store = loadAccounts(env.ctxRoot);
+    if (!store) {
+      console.log('No accounts.json found at state/oauth/accounts.json');
+      return;
+    }
+    for (const [name, acct] of Object.entries(store.accounts)) {
+      const active = name === store.active ? ' (active)' : '';
+      const expiry = new Date(acct.expires_at).toISOString();
+      const warn5h = acct.five_hour_utilization >= ALERT_5H ? ' ⚠️' : '';
+      const warn7d = acct.seven_day_utilization >= ALERT_7D ? ' ⚠️' : '';
+      console.log(`${name}${active}`);
+      console.log(`  5h: ${pct(acct.five_hour_utilization)}${warn5h}  7d: ${pct(acct.seven_day_utilization)}${warn7d}  expires: ${expiry}`);
+    }
+  });
+
+function pct(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
