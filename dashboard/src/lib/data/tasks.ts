@@ -20,7 +20,7 @@ export function getTasks(filters?: TaskFilters): Task[] {
     // 'human' is a virtual filter: returns tasks assigned to any non-agent human
     // (agents create human tasks with assigned_to 'james', 'user', 'human', etc.)
     if (filters.agent === 'human') {
-      conditions.push("(assignee IN ('human', 'user', 'james') OR title LIKE '[HUMAN]%')");
+      conditions.push("(assignee IN ('human', 'user', 'james') OR title LIKE '[HUMAN]%' OR project = 'human-tasks')");
     } else {
       conditions.push('assignee = ?');
       params.push(filters.agent);
