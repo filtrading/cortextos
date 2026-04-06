@@ -27,6 +27,9 @@ agents/*/local/
 agents/*/telegram-images/
 agents/*/memory/
 
+# macOS metadata
+.DS_Store
+
 # Test artifacts
 test-results/
 *.log
