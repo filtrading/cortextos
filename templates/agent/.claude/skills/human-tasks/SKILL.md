@@ -17,12 +17,17 @@ A human task is for when you CANNOT do something — it requires human capabilit
 
 ## Creating a Human Task
 
+Three signals tell the dashboard to route this to "Your Tasks" — all three are required:
+1. Title must start with `[HUMAN]`
+2. `--assignee human`
+3. `--project human-tasks`
+
 ```bash
 # 1. Create the human task with clear step-by-step instructions
 HUMAN_TASK_ID=$(cortextos bus create-task \
   "[HUMAN] <what needs to be done>" \
   --desc "<step-by-step instructions — be specific enough for the human to complete without asking you>" \
-  --assignee "$CTX_ORCHESTRATOR_AGENT" \
+  --assignee human \
   --priority normal \
   --project human-tasks)
 
