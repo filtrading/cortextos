@@ -144,6 +144,64 @@ TARGET: Every significant piece of work (>10 minutes) = at least 1 task created.
 
 ---
 
+## Spawn Cascade Protocol (ORCHESTRATOR SPECIFIC)
+
+During active spawn cascade windows — when you are spawning one or more new specialist agents — the standard 4h heartbeat cadence is too slow to catch coordination deadlocks. This protocol tightens the orchestrator cadence to 5m and proactively drives three behaviors: Phase 1 hello to newly-spawned agents, tight fleet health polling, and a 20-min staleness alarm via Telegram.
+
+**Root cause addressed:** The coordination deadlock pattern where the orchestrator and newly-spawned specialists wait passively on state transitions that never resolve. Without active polling during the spawn window, the system can sit silent for 1+ hours before a human notices.
+
+### Three deltas (from 4h passive to 5m active)
+
+**Delta (a) — pre-boot shepherd warning / Phase 1 hello (5-min SLA)**
+
+Whenever the orchestrator sees a new agent in `cortextos bus read-all-heartbeats` that was not in the previous snapshot, it sends a Phase 1 hello via `bus send-message`. The hello includes role context read from the new agent's `goals.json` (`.focus` + `.goals`) and requests a 1-line ACK reply to confirm bus reception. The 5-min SLA is satisfied by the 5m cascade-polling cron interval — a new agent is always detected within one fire.
+
+**Delta (b) — 15-min pilot polling → tightened to 5m cadence**
+
+Original spec called for 15-min polling during cascade. The 5m cascade-polling cron fires more frequently than the spec floor, so delta (b) is satisfied by the tighter cron. A single cron (rather than two mutually-exclusive crons) matches the read-at-fire-time flag pattern and keeps config.json clean.
+
+**Delta (c) — 20-min staleness alarm via Telegram**
+
+For each live agent on each fire, the orchestrator calls `scripts/fleet-state.sh <agent> --raw` to get integer-second ages across the four-signal classifier (file heartbeat, bus outbound, protocol events, heartbeat text). If `MIN(out_age, hb_age)` exceeds 1200 seconds (20 min) AND the agent has not been alarmed in the last 15 min, the orchestrator pages the user via `bus send-telegram`. The 15-min rate limit prevents alarm storms on persistently-stale agents. Alarm state is persisted in `$CTX_ROOT/state/<orchestrator>/cascade-alarm-state.json`.
+
+The `--raw` flag on `fleet-state.sh` emits always-numeric output (`STATE out_age hb_age text_age cpu session_age`), with `OFF` state encoded as `OFF 999999 999999 999999 0 0` sentinel values. The alarm loop skips `STATE==OFF` before reading ages.
+
+### Toggling cascade mode
+
+Cascade mode is controlled by a single boolean field in `config.json`:
+
+```json
+{
+  "spawn_cascade_active": false,
+  "crons": [...]
+}
+```
+
+**Start cascade** (at the beginning of a spawn window):
+1. Edit `config.json`, set `"spawn_cascade_active": true`
+2. The `cascade-polling` cron (defined but no-op when flag is false) will begin executing Step 3a on its next 5m fire
+3. Optionally: manually trigger the first fire via `/loop` to minimize startup latency
+
+**End cascade** (when all new agents are confirmed healthy and on their own heartbeat cadence):
+1. Edit `config.json`, set `"spawn_cascade_active": false`
+2. The `cascade-polling` cron continues to fire every 5m but no-ops immediately after reading the flag
+3. Delete `cascade-seen-agents.json` and `cascade-alarm-state.json` if you want a clean slate for the next cascade (optional — stale entries do not cause harm)
+
+**Why always-defined no-op instead of dynamic cron add/remove:** avoids the operational cost of manipulating crons on every cascade, matches the read-at-fire-time pattern, and keeps the cron definition discoverable in `config.json` for any orchestrator instance.
+
+### State files
+
+- `$CTX_ROOT/state/<orchestrator>/cascade-seen-agents.json` — JSON array of agent names the orchestrator has sent Phase 1 hello to. Updated atomically on every cron fire when cascade is active.
+- `$CTX_ROOT/state/<orchestrator>/cascade-alarm-state.json` — JSON object `{"last_alarm_ts": {"<agent>": <epoch_seconds>}}` tracking the last Telegram alarm timestamp per agent for rate-limiting. Updated atomically after each Telegram send.
+
+### Dependency
+
+This protocol depends on `scripts/fleet-state.sh --raw` being available and executable. The `scripts/` directory is committed alongside `templates/orchestrator/` so any orchestrator spawned from template has the required tooling.
+
+See `HEARTBEAT.md` Step 3a for the exact bash implementation of each sub-step.
+
+---
+
 ## Blocked Tasks, Human Tasks, and Approvals
 
 Three distinct states when you cannot proceed. Use the right one.
