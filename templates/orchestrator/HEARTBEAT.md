@@ -57,6 +57,105 @@ cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Pending approval needs your d
 cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "[HUMAN] task waiting on you: <title> — blocking <agent> on <parent task>"
 ```
 
+## Step 3a: Spawn Cascade Mode (ORCHESTRATOR — only fires when cascade active)
+
+Full reference: `.claude/skills/agent-management/SKILL.md`
+
+This step runs ONLY when the cascade-polling cron is firing (every 5m) AND `config.json .spawn_cascade_active` is `true`. The cron prompt already checks the flag and no-ops on false — so if you are reading this step, the flag is true and you are inside an active spawn cascade window.
+
+**Why this step exists:** Root cause fix for the coordination deadlock pattern where the orchestrator and newly-spawned specialists wait passively on state transitions that never resolve. The passive 4h heartbeat cadence is too slow to catch spawn-time deadlocks. During active cascade windows this step tightens the cadence to 5m and proactively drives three behaviors: Phase 1 hello to new agents, tight fleet polling, and a 20-min staleness alarm.
+
+Execute the three sub-steps in order.
+
+**Sub-step (a): Phase 1 hello to newly-spawned agents (5-min SLA from daemon start)**
+
+Compare the current agent roster against the cached "seen" set. Any agent in current but not seen is new — send them a Phase 1 hello with role context from their `goals.json`:
+
+```bash
+SEEN_FILE="$CTX_ROOT/state/$CTX_AGENT_NAME/cascade-seen-agents.json"
+mkdir -p "$(dirname "$SEEN_FILE")"
+current=$(cortextos bus read-all-heartbeats --format json | jq -r '.[].agent')
+seen=""
+[[ -f "$SEEN_FILE" ]] && seen=$(jq -r '.[]' "$SEEN_FILE" 2>/dev/null || true)
+
+for agent in $current; do
+  if ! echo "$seen" | grep -qx "$agent"; then
+    # New agent — send Phase 1 hello
+    goals_json="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/$agent/goals.json"
+    focus=$(jq -r '.focus // "(awaiting goal configuration)"' "$goals_json" 2>/dev/null || echo "(no goals yet)")
+    goals_list=$(jq -r '(.goals // []) | map("- \(.)") | join("\n")' "$goals_json" 2>/dev/null || echo "")
+    hello_text=$(cat <<HELLO
+Welcome. I am $CTX_AGENT_NAME, orchestrator for $CTX_ORG. I see you booted at $(date -u +%Y-%m-%dT%H:%M:%SZ).
+
+Your initial role: $focus
+
+Primary responsibilities:
+$goals_list
+
+Ping me via \`cortextos bus send-message $CTX_AGENT_NAME normal\` if you hit blockers. Expect your first heartbeat cron fire within 4h.
+
+Reply with a 1-line current status so I can confirm you are receiving bus messages.
+HELLO
+)
+    cortextos bus send-message "$agent" normal "$hello_text"
+    cortextos bus log-event action phase_1_hello_sent info \
+      --meta "{\"agent\":\"$agent\",\"orchestrator\":\"$CTX_AGENT_NAME\"}"
+  fi
+done
+
+# Update seen set atomically
+echo "$current" | jq -R -s 'split("\n") | map(select(length > 0))' > "$SEEN_FILE.tmp" \
+  && mv "$SEEN_FILE.tmp" "$SEEN_FILE"
+```
+
+**Sub-step (b): Fleet health poll (5m cadence during cascade, replaces 4h heartbeat poll)**
+
+Log the poll fire event so the activity feed shows active cascade coverage:
+
+```bash
+cortextos bus log-event action cascade_poll_fire info \
+  --meta "{\"orchestrator\":\"$CTX_AGENT_NAME\"}"
+```
+
+The iteration in sub-step (c) below doubles as the fleet health sweep — every agent gets a state check on every fire. No additional polling call needed here.
+
+**Sub-step (c): 20-min staleness alarm via Telegram**
+
+For each live agent, call `scripts/fleet-state.sh <agent> --raw` to get integer-second ages across all four signal sources. If `MIN(out_age, hb_age)` exceeds 1200 seconds (20 min) AND the agent hasn't been alarmed in the last 15 min, page the user via Telegram. Rate-limiting prevents alarm storms on persistently-stale agents.
+
+```bash
+ALARM_FILE="$CTX_ROOT/state/$CTX_AGENT_NAME/cascade-alarm-state.json"
+mkdir -p "$(dirname "$ALARM_FILE")"
+[[ -f "$ALARM_FILE" ]] || echo '{"last_alarm_ts":{}}' > "$ALARM_FILE"
+now=$(date +%s)
+
+for agent in $current; do
+  read -r state out_age hb_age text_age cpu session_age \
+    < <(scripts/fleet-state.sh "$agent" --raw 2>/dev/null || echo "ERROR 0 0 0 0 0")
+  [[ "$state" == "OFF" || "$state" == "ERROR" ]] && continue  # skip offline / lookup failures
+
+  # MIN(out_age, hb_age) — composite activity signal per calibration #4 semantics
+  min_age=$(( out_age < hb_age ? out_age : hb_age ))
+  if (( min_age > 1200 )); then
+    last_alarm=$(jq -r ".last_alarm_ts[\"$agent\"] // 0" "$ALARM_FILE")
+    if (( now - last_alarm > 900 )); then
+      # Fire alarm: min_age > 20min AND last alarm > 15min ago
+      human="$(( min_age / 60 ))m"
+      cortextos bus send-telegram "$CTX_TELEGRAM_CHAT_ID" \
+        "Spawn cascade alarm: $agent silent for $human (min of hb_age=${hb_age}s, out_age=${out_age}s, text_age=${text_age}s). Check dashboard."
+      # Update alarm state atomically
+      jq --arg a "$agent" --argjson t "$now" \
+        '.last_alarm_ts[$a] = $t' "$ALARM_FILE" > "$ALARM_FILE.tmp" \
+        && mv "$ALARM_FILE.tmp" "$ALARM_FILE"
+      cortextos bus log-event action cascade_staleness_alarm warning \
+        --meta "{\"agent\":\"$agent\",\"min_age_s\":$min_age,\"hb_age_s\":$hb_age,\"out_age_s\":$out_age,\"text_age_s\":$text_age}"
+    fi
+  fi
+done
+```
+
+**Toggling cascade mode:** Edit `config.json` directly. Set `"spawn_cascade_active": true` at the start of a spawn cascade window, `false` when the cascade completes. The `cascade-polling` cron is always defined in `config.json` (fires every 5m) but no-ops at fire time when the flag is false — see the cron entry and `## Spawn Cascade Protocol` section in `AGENTS.md` for the toggle workflow.
+
 ## Step 3b: Check own task queue + stale task detection
 
 Full reference: `.claude/skills/tasks/SKILL.md`

@@ -13,12 +13,19 @@
     "always_ask": [],
     "never_ask": []
   },
+  "spawn_cascade_active": false,
   "crons": [
     {
       "name": "heartbeat",
       "type": "recurring",
       "interval": "4h",
       "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, review agent health via cortextos bus read-all-heartbeats, and work on coordination tasks."
+    },
+    {
+      "name": "cascade-polling",
+      "type": "recurring",
+      "interval": "5m",
+      "prompt": "Check config.json .spawn_cascade_active. If false, no-op and exit immediately (default state). If true, read HEARTBEAT.md Step 3a Spawn Cascade Mode and execute the three sub-steps: (a) detect newly-spawned agents via read-all-heartbeats diff vs cascade-seen-agents.json cache and send Phase 1 hello, (b) log cascade_poll_fire event, (c) iterate scripts/fleet-state.sh <agent> --raw for each live agent and page Telegram alarm if MIN(out_age, hb_age) > 1200s AND last alarm > 900s ago. Rate-limit state in cascade-alarm-state.json."
     },
     {
       "name": "check-approvals",
