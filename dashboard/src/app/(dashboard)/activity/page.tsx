@@ -1,5 +1,6 @@
 import { getOrgs, getAllAgents } from '@/lib/config';
 import { getRecentEvents } from '@/lib/data/events';
+import { initWatcher } from '@/lib/watcher';
 import { ActivityPageClient } from './client';
 
 export default async function ActivityPage({
@@ -11,6 +12,11 @@ export default async function ActivityPage({
   const orgs = getOrgs();
   const orgParam = typeof params.org === 'string' ? params.org : undefined;
   const org = orgParam && orgs.includes(orgParam) ? orgParam : undefined;
+
+  // Bootstrap ordering: the watcher's initial syncAll() must run before the first
+  // getRecentEvents read, otherwise a cold process serves stale SQLite from before
+  // any file watching began. initWatcher is a singleton in dev; see slice_001 findings.
+  initWatcher();
 
   // Initial load: most recent 100 events
   const initialEvents = getRecentEvents(100, org);
