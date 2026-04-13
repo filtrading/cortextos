@@ -175,7 +175,7 @@ export interface User {
 // -- SSE Types --
 
 export interface SSEEvent {
-  type: 'task' | 'approval' | 'heartbeat' | 'event' | 'sync';
+  type: EventType | 'sync';
   data: Record<string, unknown>;
   timestamp: string;
 }

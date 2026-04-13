@@ -48,7 +48,7 @@ function sseToDisplayEvent(sse: SSEEvent, index: number): DisplayEvent {
   return {
     id: `sse-${sse.timestamp}-${index}`,
     timestamp: sse.timestamp,
-    type: sse.type ?? 'event',
+    type: sse.type ?? 'action',
     agent: (sse.data?.agent as string) ?? '',
     message: (sse.data?.message as string) ?? sse.type ?? 'Event',
   };
