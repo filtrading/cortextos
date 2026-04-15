@@ -8,6 +8,7 @@ import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { logEvent, queryEvents } from '../bus/event.js';
 import { addSubscription, removeSubscription, getSubscriptions } from '../bus/subscriptions.js';
+import { checkSLA } from '../bus/sla-monitor.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
@@ -302,6 +303,42 @@ busCommand
         const ev = (e.event as string) || '';
         const sev = (e.severity as string) || '';
         console.log(`  ${ts}  ${agent}  ${cat}/${ev}  (${sev})`);
+      }
+    }
+  });
+
+busCommand
+  .command('check-event-sla')
+  .option('--json', 'Output as JSON')
+  .option('--alert', 'Send Telegram alerts for violations')
+  .description('Check event SLA compliance across all agents. Reads rules from orgs/<org>/config/event-sla-rules.json (uses defaults if absent).')
+  .action((opts: { json?: boolean; alert?: boolean }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const ctxRoot = join(require('os').homedir(), '.cortextos', env.instanceId);
+    const violations = checkSLA(paths, ctxRoot, env.org);
+
+    if (opts.json) {
+      console.log(JSON.stringify(violations, null, 2));
+    } else if (violations.length === 0) {
+      console.log('All SLA rules satisfied. No violations.');
+    } else {
+      console.log(`SLA Violations (${violations.length}):\n`);
+      for (const v of violations) {
+        console.log(`  [${v.rule_type}] ${v.agent}: ${v.description}`);
+        console.log(`    Details: ${JSON.stringify(v.details)}`);
+        console.log();
+      }
+    }
+
+    if (opts.alert && violations.length > 0) {
+      const chatId = process.env.CTX_TELEGRAM_CHAT_ID || process.env.CHAT_ID;
+      if (chatId) {
+        const summary = violations.map(v => `- ${v.agent}: ${v.description}`).join('\n');
+        const alertMsg = `SLA violations detected (${violations.length}):\n${summary}`;
+        try {
+          spawnSync(process.argv[0], [process.argv[1], 'bus', 'send-telegram', chatId, alertMsg], { stdio: 'pipe' });
+        } catch { /* alert failure is non-fatal */ }
       }
     }
   });
