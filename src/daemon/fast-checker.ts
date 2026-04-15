@@ -134,11 +134,15 @@ export class FastChecker {
     let messageBlock = '';
     const ackIds: string[] = [];
 
-    // Process queued Telegram messages
+    // Snapshot queued Telegram messages WITHOUT draining — drain only after
+    // confirmed injection. Prevents message loss when injectMessage returns
+    // false (pty unavailable, agent not running, dedup). Fix for Type H #1:
+    // Telegram injection drop bug that recursively dropped Fil's 12:13 WITA
+    // pilot-stuck message on 2026-04-13.
     let hasTelegramMessage = false;
-    while (this.telegramMessages.length > 0) {
-      const msg = this.telegramMessages.shift()!;
-      messageBlock += msg.formatted;
+    const pendingTelegramCount = this.telegramMessages.length;
+    for (let i = 0; i < pendingTelegramCount; i++) {
+      messageBlock += this.telegramMessages[i].formatted;
       hasTelegramMessage = true;
     }
 
@@ -153,6 +157,8 @@ export class FastChecker {
     if (messageBlock) {
       const injected = this.agent.injectMessage(messageBlock);
       if (injected) {
+        // Drain successfully injected Telegram messages from the queue
+        this.telegramMessages.splice(0, pendingTelegramCount);
         // ACK inbox messages
         for (const id of ackIds) {
           ackInbox(this.paths, id);
@@ -166,6 +172,11 @@ export class FastChecker {
         }
         // Cooldown after injection
         await sleep(5000);
+      } else {
+        // Injection failed — Telegram messages stay in queue for retry on
+        // next poll cycle. Inbox messages stay on disk (auto-redeliver after
+        // 5 min per inbox protocol). No data loss.
+        this.log(`Injection failed — ${pendingTelegramCount} Telegram msg(s) + ${ackIds.length} inbox msg(s) retained for retry`);
       }
     }
 
