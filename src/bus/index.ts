@@ -3,7 +3,7 @@
 
 export { sendMessage, checkInbox, ackInbox } from './message.js';
 export { createTask, updateTask, completeTask, listTasks } from './task.js';
-export { logEvent } from './event.js';
+export { logEvent, queryEvents, type QueryEventsOptions } from './event.js';
 export {
   getSubscriptions,
   addSubscription,

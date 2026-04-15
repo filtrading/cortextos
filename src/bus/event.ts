@@ -1,4 +1,4 @@
-import { appendFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { EventCategory, EventSeverity, BusPaths } from '../types/index.js';
 import { ensureDir } from '../utils/atomic.js';
@@ -64,4 +64,89 @@ export function logEvent(
     id: eventId,
     metadata: meta,
   });
+}
+
+export interface QueryEventsOptions {
+  agent?: string;
+  eventType?: string;
+  category?: string;
+  severity?: string;
+  days?: number;
+  limit?: number;
+}
+
+/**
+ * Query events from JSONL files with filtering.
+ * Returns matching events sorted newest-first.
+ */
+export function queryEvents(
+  analyticsDir: string,
+  options: QueryEventsOptions = {},
+): Record<string, unknown>[] {
+  const { agent, eventType, category, severity, days = 7, limit = 100 } = options;
+  const eventsBaseDir = join(analyticsDir, 'events');
+
+  // Determine date range
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  // Collect agent directories to scan
+  let agentDirs: string[] = [];
+  if (agent) {
+    const agentDir = join(eventsBaseDir, agent);
+    if (existsSync(agentDir)) agentDirs = [agentDir];
+  } else {
+    try {
+      agentDirs = readdirSync(eventsBaseDir, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => join(eventsBaseDir, d.name));
+    } catch {
+      return [];
+    }
+  }
+
+  const results: Record<string, unknown>[] = [];
+
+  for (const agentDir of agentDirs) {
+    // Scan date-named JSONL files within range
+    let files: string[];
+    try {
+      files = readdirSync(agentDir).filter(f => f.endsWith('.jsonl')).sort().reverse();
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      const dateStr = file.replace('.jsonl', '');
+      const fileDate = new Date(dateStr + 'T00:00:00Z');
+      if (fileDate < startDate || fileDate > endDate) continue;
+
+      let lines: string[];
+      try {
+        lines = readFileSync(join(agentDir, file), 'utf-8').trim().split('\n').filter(Boolean);
+      } catch {
+        continue;
+      }
+
+      // Process lines in reverse (newest first)
+      for (let i = lines.length - 1; i >= 0; i--) {
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(lines[i]);
+        } catch {
+          continue;
+        }
+
+        if (eventType && event.event !== eventType) continue;
+        if (category && event.category !== category) continue;
+        if (severity && event.severity !== severity) continue;
+
+        results.push(event);
+        if (results.length >= limit) return results;
+      }
+    }
+  }
+
+  return results;
 }
