@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('child_process', () => ({ exec: vi.fn() }));
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -71,6 +73,156 @@ describe('FastChecker', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
+  });
+
+  describe('handleActivityCallback (Telegram approval inline buttons)', () => {
+    // Helper: write a minimal pending approval to disk so updateApproval
+    // (called inside handleActivityCallback) has a target to resolve.
+    function writeTestApproval(id: string): void {
+      const pendingDir = join(paths.approvalDir, 'pending');
+      mkdirSync(pendingDir, { recursive: true });
+      const approval = {
+        id,
+        title: 'Test approval',
+        requesting_agent: 'alice',
+        org: 'TestOrg',
+        category: 'deployment',
+        status: 'pending',
+        description: '',
+        created_at: '2026-04-13T00:00:00Z',
+        updated_at: '2026-04-13T00:00:00Z',
+        resolved_at: null,
+        resolved_by: null,
+      };
+      writeFileSync(join(pendingDir, `${id}.json`), JSON.stringify(approval));
+    }
+
+    it('appr_allow_<id>: resolves approval to approved, answers callback, edits message', async () => {
+      const approvalId = 'approval_1234567890_abcde';
+      writeTestApproval(approvalId);
+
+      const agent = createMockAgent();
+      const activityApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: activityApi,
+        allowedUserId: 42,
+      });
+
+      const query = createCallbackQuery(`appr_allow_${approvalId}`, {
+        from: { id: 42, first_name: 'Alice', username: 'alice' },
+      });
+      await checker.handleActivityCallback(query, activityApi);
+
+      // Approval file moved from pending/ to resolved/ with status approved.
+      const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
+      const resolvedFile = join(paths.approvalDir, 'resolved', `${approvalId}.json`);
+      expect(existsSync(pendingFile)).toBe(false);
+      expect(existsSync(resolvedFile)).toBe(true);
+      const approval = JSON.parse(readFileSync(resolvedFile, 'utf-8'));
+      expect(approval.status).toBe('approved');
+      expect(approval.resolved_by).toContain('Alice');
+      expect(approval.resolved_by).toContain('@alice');
+
+      // Telegram side effects: answerCallbackQuery + editMessageText called.
+      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Approved');
+      expect(activityApi.editMessageText).toHaveBeenCalled();
+      const editCall = activityApi.editMessageText.mock.calls[0];
+      expect(String(editCall[2])).toMatch(/Approved by Alice/);
+    });
+
+    it('appr_deny_<id>: resolves approval to denied with audit label', async () => {
+      const approvalId = 'approval_1234567890_fffff';
+      writeTestApproval(approvalId);
+
+      const agent = createMockAgent();
+      const activityApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: activityApi,
+        allowedUserId: 42,
+      });
+
+      const query = createCallbackQuery(`appr_deny_${approvalId}`, {
+        from: { id: 42, first_name: 'Alice', username: 'alice' },
+      });
+      await checker.handleActivityCallback(query, activityApi);
+
+      const resolvedFile = join(paths.approvalDir, 'resolved', `${approvalId}.json`);
+      expect(existsSync(resolvedFile)).toBe(true);
+      const approval = JSON.parse(readFileSync(resolvedFile, 'utf-8'));
+      expect(approval.status).toBe('rejected');
+      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Denied');
+      const editCall = activityApi.editMessageText.mock.calls[0];
+      expect(String(editCall[2])).toMatch(/Denied by Alice/);
+    });
+
+    it('rejects callbacks from non-whitelisted users with no state change', async () => {
+      const approvalId = 'approval_1234567890_zzzzz';
+      writeTestApproval(approvalId);
+
+      const agent = createMockAgent();
+      const activityApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: activityApi,
+        allowedUserId: 42,
+      });
+
+      const query = createCallbackQuery(`appr_allow_${approvalId}`, {
+        from: { id: 9999, first_name: 'Attacker', username: 'evil' },
+      });
+      await checker.handleActivityCallback(query, activityApi);
+
+      // Approval NOT resolved — still in pending/.
+      const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
+      expect(existsSync(pendingFile)).toBe(true);
+      // Security callback answered but edit NEVER called.
+      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Not authorized');
+      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+    });
+
+    it('unknown approval_id: fails gracefully, answers with error, no state mutation', async () => {
+      const agent = createMockAgent();
+      const activityApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: activityApi,
+        allowedUserId: 42,
+      });
+
+      const query = createCallbackQuery('appr_allow_approval_1_ghost', {
+        from: { id: 42, first_name: 'Alice', username: 'alice' },
+      });
+      await checker.handleActivityCallback(query, activityApi);
+
+      // No resolved file created, editMessageText not called (approval
+      // file never existed so no successful resolution path).
+      expect(existsSync(join(paths.approvalDir, 'resolved'))).toBe(false);
+      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      // User gets a friendly "not found" on the callback spinner.
+      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith(
+        'cb-123',
+        expect.stringMatching(/not found|already resolved/i),
+      );
+    });
+
+    it('non-appr_* prefix: ignored with "Unknown button" response, no state mutation', async () => {
+      const agent = createMockAgent();
+      const activityApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: activityApi,
+        allowedUserId: 42,
+      });
+
+      // The activity-channel poller only ever posts appr_* buttons, but
+      // this test guards against any future stray callback (e.g. someone
+      // forwards a permission button message into the activity chat)
+      // getting silently acted on. Must reject.
+      const query = createCallbackQuery('perm_allow_deadbeef', {
+        from: { id: 42, first_name: 'Alice', username: 'alice' },
+      });
+      await checker.handleActivityCallback(query, activityApi);
+
+      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Unknown button');
+      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+    });
   });
 
   describe('isAgentActive', () => {
@@ -186,14 +338,14 @@ describe('FastChecker', () => {
 
     it('works without last-sent context', () => {
       const result = FastChecker.formatTelegramTextMessage(
-        'bob',
+        'alice',
         '123',
         'Hi',
         '/opt/cortextos',
       );
 
       expect(result).not.toContain('[Your last message');
-      expect(result).toContain('=== TELEGRAM from [USER: bob] (chat_id:123) ===');
+      expect(result).toContain('=== TELEGRAM from [USER: alice] (chat_id:123) ===');
       expect(result).toContain('Hi');
     });
 
@@ -226,6 +378,11 @@ describe('FastChecker', () => {
 
       expect(result).toContain('[Replying to: "Original message"]');
       expect(result).toContain('[Your last message: "Last sent text"]');
+    });
+
+    it('instruction uses single quotes to prevent shell variable expansion of $-numbers', () => {
+      const result = FastChecker.formatTelegramTextMessage('alice', '999', 'Hello', '/opt/cortextos');
+      expect(result).toContain("send-telegram 999 '<your reply>'");
     });
   });
 
@@ -504,7 +661,7 @@ describe('FastChecker', () => {
       expect(result).toContain('caption:');
       expect(result).toContain('Check this out');
       expect(result).toContain('local_file: /tmp/telegram-images/20260403_abc12345678.jpg');
-      expect(result).toContain('cortextos bus send-telegram 123456789');
+      expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
 
     it('formats photo message with empty caption', () => {
@@ -530,7 +687,7 @@ describe('FastChecker', () => {
       expect(result).toContain('Here is the file');
       expect(result).toContain('local_file: /tmp/telegram-images/report.pdf');
       expect(result).toContain('file_name: report.pdf');
-      expect(result).toContain('cortextos bus send-telegram 123456789');
+      expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
 
@@ -546,13 +703,62 @@ describe('FastChecker', () => {
       expect(result).toContain('=== TELEGRAM VOICE from Alice (chat_id:123456789) ===');
       expect(result).toContain('duration: 12s');
       expect(result).toContain('local_file: /tmp/telegram-images/voice_1743718313.ogg');
-      expect(result).toContain('cortextos bus send-telegram 123456789');
+      expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
 
     it('uses "unknown" when duration is undefined', () => {
-      const result = FastChecker.formatTelegramVoiceMessage('Bob', '123', '/tmp/voice.ogg', undefined);
+      const result = FastChecker.formatTelegramVoiceMessage('Alice', '123', '/tmp/voice.ogg', undefined);
 
       expect(result).toContain('duration: unknowns');
+    });
+  });
+
+  describe('heartbeat watchdog', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+    it('fires exec after bootstrap at 50-min interval', async () => {
+      const { exec } = await import('child_process');
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+      expect(exec).toHaveBeenCalledWith(
+        expect.stringContaining('[watchdog] my-agent alive — idle session'),
+        expect.any(Function),
+      );
+      checker.stop();
+      checker.wake();
+    });
+
+    it('clears timer on stop — no further exec calls after stop', async () => {
+      const { exec } = await import('child_process');
+      const execMock = exec as ReturnType<typeof vi.fn>;
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+      const callsBefore = execMock.mock.calls.length;
+      expect(callsBefore).toBeGreaterThan(0);
+      checker.stop();
+      checker.wake();
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+      expect(execMock.mock.calls.length).toBe(callsBefore);
+    });
+
+    it('does not fire before bootstrap completes', async () => {
+      const { exec } = await import('child_process');
+      const agent = createMockAgent('my-agent');
+      agent.isBootstrapped.mockReturnValue(false);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(20 * 1000);
+      expect(exec).not.toHaveBeenCalledWith(
+        expect.stringContaining('[watchdog]'),
+        expect.any(Function),
+      );
+      checker.stop();
+      checker.wake();
     });
   });
 
@@ -573,7 +779,7 @@ describe('FastChecker', () => {
       expect(result).toContain('duration: 45s');
       expect(result).toContain('local_file: /tmp/telegram-images/video_1743718313.mp4');
       expect(result).toContain('file_name: video_1743718313.mp4');
-      expect(result).toContain('cortextos bus send-telegram 123456789');
+      expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
 });

@@ -4,6 +4,7 @@ import type { EventCategory, EventSeverity, BusPaths } from '../types/index.js';
 import { ensureDir } from '../utils/atomic.js';
 import { randomString } from '../utils/random.js';
 import { validateEventCategory, validateEventSeverity, isValidJson } from '../utils/validate.js';
+import { notifySubscribers } from './subscriptions.js';
 
 /**
  * Log a structured event. Appends JSONL line to daily event file.
@@ -54,4 +55,13 @@ export function logEvent(
   });
 
   appendFileSync(join(eventsDir, `${today}.jsonl`), eventLine + '\n', 'utf-8');
+
+  // Route matching events to subscribed agents' inboxes
+  notifySubscribers(paths, org, agentName, {
+    category,
+    event: eventName,
+    severity,
+    id: eventId,
+    metadata: meta,
+  });
 }

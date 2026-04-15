@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -316,6 +316,29 @@ export class AgentProcess {
     this.pty = null;
     this.clearSessionTimer();
 
+    // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
+    // the whole process group and reaches each PTY's Claude Code child
+    // BEFORE the daemon's stopAll() loop has a chance to call stopAgent() on
+    // it. Those children exit cleanly (code 0) but arrive at handleExit with
+    // stopRequested=false, which used to classify the exit as a crash and
+    // inflate .crash_count_today by one per agent, per PM2 restart.
+    //
+    // agent-manager.ts:stopAll() already writes a `.daemon-stop` marker in
+    // every agent's state dir at the START of its shutdown loop for an
+    // unrelated reason (SessionEnd crash-alert hook). We reuse that marker
+    // here as the authoritative "the daemon is going down" signal. If the
+    // marker exists AND is recent (written within the last 60s), any PTY
+    // exit is a shutdown casualty, not a real crash — swallow it.
+    //
+    // The 60s window guards against a stale marker from a previous shutdown
+    // that wasn't cleaned up: we do NOT want an old marker to silently mask
+    // a genuine crash days later. handleExit does NOT delete the marker —
+    // cleanup stays with agent-manager / hook-crash-alert per the existing
+    // separation of concerns.
+    if (this.isDaemonShuttingDown()) {
+      return;
+    }
+
     // BUG-040 fix: check stopRequested instead of (only) stopping. The
     // stopping flag is cleared inside stop() after a 15s timeout window —
     // which means a slow PTY shutdown can fire handleExit AFTER stopping is
@@ -340,6 +363,7 @@ export class AgentProcess {
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
+      this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
       this.status = 'halted';
       this.notifyStatusChange();
       return;
@@ -348,6 +372,11 @@ export class AgentProcess {
     // Exponential backoff restart
     const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
     this.log(`Crash recovery: restart in ${backoff / 1000}s (crash #${this.crashCount})`);
+    // Persist the crash to restarts.log so operators have a durable audit
+    // trail. Previously only planned SELF-RESTART / HARD-RESTART from
+    // bus/system.ts wrote here, which left daemon-classified crashes
+    // invisible outside the rotating PM2 daemon stdout log.
+    this.appendCrashToRestartsLog(exitCode, backoff, 'CRASH');
     this.status = 'crashed';
     this.notifyStatusChange();
 
@@ -441,17 +470,98 @@ export class AgentProcess {
   }
 
   private startSessionTimer(): void {
-    const maxSession = (this.config.max_session_seconds || 255600) * 1000;
-    this.sessionTimer = setTimeout(() => {
-      this.log(`Session timer fired after ${maxSession / 1000}s`);
-      this.sessionRefresh().catch(err => this.log(`Session refresh failed: ${err}`));
-    }, maxSession);
+    const DEFAULT_MAX_SESSION_S = 255600;
+    const startedAt = Date.now();
+    const initialMs = (this.config.max_session_seconds || DEFAULT_MAX_SESSION_S) * 1000;
+
+    // BUG-048 fix: re-read max_session_seconds from config.json on each timer
+    // fire so that config changes after start() take effect. Without this, a
+    // briefly-low max_session_seconds baked at start time causes a fleet-wide
+    // simultaneous restart when all agents hit the same stale deadline.
+    const scheduleCheck = (delayMs: number): void => {
+      this.sessionTimer = setTimeout(() => {
+        // Re-read current config from disk
+        let currentMaxMs = initialMs;
+        try {
+          const configPath = join(this.env.agentDir, 'config.json');
+          if (existsSync(configPath)) {
+            const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+            currentMaxMs = (cfg.max_session_seconds || DEFAULT_MAX_SESSION_S) * 1000;
+          }
+        } catch { /* use initial value on read error */ }
+
+        const elapsedMs = Date.now() - startedAt;
+        const remainingMs = currentMaxMs - elapsedMs;
+
+        if (remainingMs > 5000) {
+          // Config was updated to a longer duration — reschedule for the remaining time.
+          this.log(`Session timer: config updated to ${currentMaxMs / 1000}s, rescheduling (${Math.round(remainingMs / 1000)}s remaining)`);
+          scheduleCheck(remainingMs);
+          return;
+        }
+
+        this.log(`Session timer fired after ${Math.round(elapsedMs / 1000)}s (limit: ${currentMaxMs / 1000}s)`);
+        this.sessionRefresh().catch(err => this.log(`Session refresh failed: ${err}`));
+      }, delayMs);
+    };
+
+    scheduleCheck(initialMs);
   }
 
   private clearSessionTimer(): void {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  /**
+   * Check whether the daemon is currently in its shutdown sequence.
+   *
+   * Returns true iff a `.daemon-stop` marker exists in this agent's state
+   * dir AND was written within the last 60 seconds. The marker is written
+   * by AgentManager.stopAll() before it begins iterating stopAgent() calls.
+   * A stale marker older than 60s is treated as leftover from a prior
+   * shutdown and ignored — real crashes must not be masked indefinitely.
+   */
+  private isDaemonShuttingDown(): boolean {
+    const marker = join(this.env.ctxRoot, 'state', this.name, '.daemon-stop');
+    try {
+      if (!existsSync(marker)) return false;
+      const ageMs = Date.now() - statSync(marker).mtimeMs;
+      return ageMs < 60_000;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Append an unplanned-exit entry to restarts.log. Complements the planned
+   * SELF-RESTART / HARD-RESTART entries written by src/bus/system.ts so that
+   * a single file gives the complete restart history for an agent.
+   *
+   * Format matches bus/system.ts: `[ISO] <KIND>: <details>`. appendFileSync
+   * uses write(2) with O_APPEND on Linux, which is atomic for writes under
+   * PIPE_BUF (~4KB) — each CRASH line fits comfortably. All errors are
+   * swallowed: logging must never break crash recovery.
+   */
+  private appendCrashToRestartsLog(
+    exitCode: number,
+    backoffMs: number,
+    kind: 'CRASH' | 'HALTED',
+  ): void {
+    try {
+      const logDir = join(this.env.ctxRoot, 'logs', this.name);
+      ensureDir(logDir);
+      const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const details =
+        kind === 'HALTED'
+          ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
+          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      const logLine = `[${timestamp}] ${kind}: ${details}\n`;
+      appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
+    } catch {
+      /* swallow — never break crash recovery on a logging failure */
     }
   }
 

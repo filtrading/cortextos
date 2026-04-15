@@ -2,10 +2,12 @@ import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { logEvent } from '../bus/event.js';
+import { addSubscription, removeSubscription, getSubscriptions } from '../bus/subscriptions.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
@@ -211,6 +213,59 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta);
     console.log(`Logged ${category}/${event} (${severity})`);
+  });
+
+busCommand
+  .command('subscribe-events')
+  .argument('<event_pattern>', 'Event name pattern to match (exact or trailing wildcard, e.g. "slice_complete" or "slice_*")')
+  .option('--subscriber <agent>', 'Agent to notify (defaults to calling agent)')
+  .option('--category <cat>', 'Event category filter (* for any)', '*')
+  .option('--priority <p>', 'Inbox message priority (normal, high, urgent)', 'high')
+  .description('Subscribe an agent to event notifications. Matching events route to the subscriber inbox automatically.')
+  .action((eventPattern: string, opts: { subscriber?: string; category: string; priority: string }) => {
+    const env = resolveEnv();
+    const subscriber = opts.subscriber || env.agentName;
+    const id = addSubscription(
+      join(homedir(), '.cortextos', env.instanceId),
+      env.org, subscriber, eventPattern, opts.category,
+      opts.priority as any, env.agentName,
+    );
+    console.log(`Subscribed ${subscriber} to "${eventPattern}" (category: ${opts.category}, priority: ${opts.priority}) — id: ${id}`);
+  });
+
+busCommand
+  .command('unsubscribe-events')
+  .argument('<event_pattern>', 'Event pattern to unsubscribe from')
+  .option('--subscriber <agent>', 'Agent to unsubscribe (defaults to calling agent)')
+  .description('Remove an event subscription.')
+  .action((eventPattern: string, opts: { subscriber?: string }) => {
+    const env = resolveEnv();
+    const subscriber = opts.subscriber || env.agentName;
+    const removed = removeSubscription(
+      join(homedir(), '.cortextos', env.instanceId),
+      env.org, subscriber, eventPattern,
+    );
+    if (removed) {
+      console.log(`Unsubscribed ${subscriber} from "${eventPattern}"`);
+    } else {
+      console.log(`No subscription found for ${subscriber} on "${eventPattern}"`);
+    }
+  });
+
+busCommand
+  .command('list-subscriptions')
+  .description('List all event subscriptions for this org.')
+  .action(() => {
+    const env = resolveEnv();
+    const subs = getSubscriptions(join(homedir(), '.cortextos', env.instanceId), env.org);
+    if (subs.length === 0) {
+      console.log('No event subscriptions.');
+      return;
+    }
+    console.log(`Event subscriptions (${subs.length}):\n`);
+    for (const s of subs) {
+      console.log(`  ${s.id}: ${s.subscriber} ← "${s.event_pattern}" (category: ${s.category}, priority: ${s.priority}, by: ${s.created_by})`);
+    }
   });
 
 busCommand
@@ -474,7 +529,7 @@ busCommand
   .option('--surface <path>', 'Surface file path')
   .option('--direction <dir>', 'Direction: higher or lower', 'higher')
   .option('--window <dur>', 'Measurement window', '24h')
-  .action((metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string }) => {
+  .action(async (metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string }) => {
     const env = resolveEnv();
     const agentDir = env.agentDir || process.cwd();
     const id = createExperiment(agentDir, env.agentName, metric, hypothesis, {
@@ -488,13 +543,14 @@ busCommand
     const config = loadExperimentConfig(agentDir);
     if (config.approval_required) {
       const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-      const approvalId = createApproval(
+      const approvalId = await createApproval(
         paths,
         env.agentName,
         env.org,
         `Run experiment: ${metric} — ${hypothesis.slice(0, 80)}`,
         'other',
         `Experiment ID: ${id}\nMetric: ${metric}\nHypothesis: ${hypothesis}`,
+        env.frameworkRoot,
       );
       console.log(`approval_required: ${approvalId}`);
     }
@@ -782,7 +838,7 @@ busCommand
   .argument('<title>', 'What you are requesting approval for')
   .argument('<category>', 'Category: external-comms, financial, deployment, data-deletion, other')
   .argument('[context]', 'Additional context')
-  .action((title: string, category: string, context?: string) => {
+  .action(async (title: string, category: string, context?: string) => {
     const validCategories: ApprovalCategory[] = ['external-comms', 'financial', 'deployment', 'data-deletion', 'other'];
     if (!validCategories.includes(category as ApprovalCategory)) {
       console.error(`Invalid category '${category}'. Must be one of: ${validCategories.join(', ')}`);
@@ -790,7 +846,13 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const id = createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '');
+    // await — createApproval fan-out posts to the activity channel, which
+    // must complete before the CLI process exits or the post silently
+    // never sends. env.frameworkRoot is passed so the activity-channel
+    // orgDir resolves to where activity-channel.env actually lives (the
+    // framework repo path, NOT the runtime state path — see
+    // src/bus/approval.ts:postApprovalToActivityChannel for the history).
+    const id = await createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '', env.frameworkRoot);
     console.log(id);
   });
 
