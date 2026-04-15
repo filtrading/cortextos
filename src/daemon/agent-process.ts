@@ -222,20 +222,27 @@ export class AgentProcess {
   }
 
   /**
-   * Restart with --continue (session refresh).
+   * Restart with a fresh session (hard restart).
+   *
+   * Writes the .force-fresh marker so start() bypasses --continue mode
+   * and launches a clean session. This prevents compaction loops where
+   * agents burn tokens repeatedly compacting stale context instead of
+   * starting fresh.
    *
    * Delegates to stop() + start() so it inherits the BUG-011 race fix
-   * automatically. This also eliminates a separate bug in the previous
-   * inline implementation where the OLD pty's exit handler could fire
-   * AFTER the NEW pty was set up, nulling out the wrong reference.
-   * `start()` will pick up `continue` mode automatically because the
-   * conversation directory still has .jsonl files (shouldContinue() is true).
+   * automatically.
    */
   async sessionRefresh(): Promise<void> {
-    this.log('Session refresh (--continue restart)');
+    this.log('Session refresh (fresh restart — force-fresh marker set)');
+
+    // Write .force-fresh marker so shouldContinue() returns false
+    const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
+    ensureDir(join(this.env.ctxRoot, 'state', this.name));
+    writeFileSync(forceFreshPath, 'session-timer: context exhaustion\n', 'utf-8');
+
     await this.stop();
     await this.start();
-    this.log('Session refreshed');
+    this.log('Session refreshed (fresh)');
   }
 
   /**
