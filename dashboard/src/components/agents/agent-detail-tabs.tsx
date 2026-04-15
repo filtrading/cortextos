@@ -8,6 +8,7 @@ import { LogsTab } from './logs-tab';
 import { CronsTab } from './crons-tab';
 import { SettingsTab } from './settings-tab';
 import { GoalsTab } from './goals-tab';
+import { MessagesTab } from './messages-tab';
 import type {
   AgentDetail,
   IdentityFields,
@@ -41,6 +42,7 @@ export function AgentDetailTabs({
         <TabsTrigger value="tasks">Tasks</TabsTrigger>
         <TabsTrigger value="crons">Crons</TabsTrigger>
         <TabsTrigger value="memory">Memory</TabsTrigger>
+        <TabsTrigger value="messages">Messages</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
         <TabsTrigger value="goals">Goals</TabsTrigger>
         <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -70,6 +72,10 @@ export function AgentDetailTabs({
           memoryRaw={detail.memoryRaw}
           memoryFiles={detail.memoryFiles}
         />
+      </TabsContent>
+
+      <TabsContent value="messages">
+        <MessagesTab agentName={detail.systemName ?? detail.name} />
       </TabsContent>
 
       <TabsContent value="logs">

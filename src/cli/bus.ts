@@ -6,7 +6,7 @@ import { homedir } from 'os';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
-import { logEvent } from '../bus/event.js';
+import { logEvent, queryEvents } from '../bus/event.js';
 import { addSubscription, removeSubscription, getSubscriptions } from '../bus/subscriptions.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
@@ -265,6 +265,44 @@ busCommand
     console.log(`Event subscriptions (${subs.length}):\n`);
     for (const s of subs) {
       console.log(`  ${s.id}: ${s.subscriber} ← "${s.event_pattern}" (category: ${s.category}, priority: ${s.priority}, by: ${s.created_by})`);
+    }
+  });
+
+busCommand
+  .command('query-events')
+  .option('--agent <name>', 'Filter by agent name')
+  .option('--event-type <type>', 'Filter by event name (e.g. slice_complete, task_completed)')
+  .option('--category <cat>', 'Filter by event category')
+  .option('--severity <sev>', 'Filter by severity')
+  .option('--days <n>', 'Number of days to scan (default: 7)', '7')
+  .option('--limit <n>', 'Max results (default: 100)', '100')
+  .option('--json', 'Output as JSON array')
+  .description('Query events from JSONL files with filtering. Returns newest first.')
+  .action((opts: { agent?: string; eventType?: string; category?: string; severity?: string; days: string; limit: string; json?: boolean }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const events = queryEvents(paths.analyticsDir, {
+      agent: opts.agent,
+      eventType: opts.eventType,
+      category: opts.category,
+      severity: opts.severity,
+      days: parseInt(opts.days, 10),
+      limit: parseInt(opts.limit, 10),
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(events, null, 2));
+    } else if (events.length === 0) {
+      console.log('No matching events found.');
+    } else {
+      console.log(`Events (${events.length}):\n`);
+      for (const e of events) {
+        const ts = (e.timestamp as string) || '';
+        const agent = (e.agent as string) || '';
+        const cat = (e.category as string) || '';
+        const ev = (e.event as string) || '';
+        const sev = (e.severity as string) || '';
+        console.log(`  ${ts}  ${agent}  ${cat}/${ev}  (${sev})`);
+      }
     }
   });
 
