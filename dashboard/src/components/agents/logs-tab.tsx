@@ -12,6 +12,17 @@ import {
 import { IconPlayerPause, IconPlayerPlay, IconRefresh } from '@tabler/icons-react';
 import type { LogFile } from '@/lib/types';
 
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\x1b[^[\]()]/g, '')
+    .replace(/\x07/g, '')
+    .replace(/\r(?!\n)/g, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 interface LogsTabProps {
   agentName: string;
   org: string;
@@ -126,7 +137,7 @@ export function LogsTab({ agentName, org, logFiles }: LogsTabProps) {
         ref={scrollRef}
         className="max-h-[500px] overflow-auto rounded-lg border bg-muted/30 p-4 font-mono text-xs leading-relaxed"
       >
-        {content || (loading ? 'Loading...' : 'No log content.')}
+        {content ? stripAnsi(content) : (loading ? 'Loading...' : 'No log content.')}
       </pre>
     </div>
   );
